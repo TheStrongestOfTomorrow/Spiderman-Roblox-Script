@@ -1,9 +1,10 @@
 --[[=====================================================================
-        SPIDER-MAN MOVEMENT ENGINE v3.1  •  Single-File Client LocalScript
+        SPIDER-MAN MOVEMENT ENGINE v3.2  •  Single-File Client LocalScript
         =====================================================================
         CONTROLS (Insomniac's Spider-Man inspired)
-          • E (hold)         Web Swing — auto sky-anchor fallback so it works
-                             on ANY map; release to let go, WASD to pump
+          • E (hold)         Web Swing — fires ONLY at a real surface (5-ray
+                             smart anchor search), true RopeConstraint
+                             pendulum; W reels in, release to fling forward
           • F (tap)          Point Launch — Space within 3s of arrival = boost
           • Space            Tight Gap Zip (face a narrow gap) / wall jump-off
           • R (x2 + S)       Dual-Web Ground Slingshot
@@ -15,8 +16,8 @@
           • RightShift       Toggle the control panel
 
         FEATURES
-          • Pendulum Swing with sharpness-filtered anchors, Hooke's-law
-            tension, rope constraint, 18° procedural body roll
+          • Web Swing with 5-ray real-surface anchor search, engine
+            RopeConstraint pendulum, forward drive + reel-in, 18° roll
           • Point Launch, Tight Gap Zip, Dual-Web Slingshot, Ground Slide
           • Passive wall crawl / wall sprint / wall jump-off
           • Procedural Air Tricks — Motor6D tuck poses, zero Animation IDs
@@ -58,15 +59,19 @@ end
 -- CONFIGURATION
 --======================================================================
 local CONFIG = {
-        -- [A] Pendulum Swing
+        -- [A] Web Swing (true RopeConstraint pendulum)
         SwingMaxDistance   = 350,   -- anchor raycast max distance (studs)
         SwingMinHeightDiff = 5,     -- anchor must be this far above the root
         SwingSteerAccel    = 42,    -- WASD pump acceleration while swinging
-        SwingDragXZ        = 0.982, -- per-frame horizontal drag (no WASD held)
+        SwingDragXZ        = 0.995, -- per-frame horizontal drag (no WASD held)
         SwingRollMaxDeg    = 18,    -- procedural body roll clamp (degrees)
         SwingRollFactor    = 0.2,   -- roll gain (per spec factor)
-        SwingVirtualDist      = 65, -- sky-web virtual anchor distance (studs)
-        SwingVirtualMinHeight = 32, -- virtual anchor min height above root
+        SwingLaunchSpeed   = 62,    -- initial impulse toward the crosshair
+        SwingLiftOff       = 18,    -- extra upward pop when starting grounded
+        SwingThrust        = 40,    -- continuous forward drive while holding E
+        SwingMaxSpeed      = 125,   -- horizontal speed cap for the drive
+        SwingWReel         = 9,     -- W reels the rope in (studs/sec)
+        SwingReleasePop    = 14,    -- upward pop when releasing mid-air
 
         -- [B] Point Launch
         LaunchSpeed        = 180,   -- linear pull speed toward target
@@ -513,12 +518,53 @@ local function startUprightRecovery(duration, after)
 end
 
 --======================================================================
--- [A] PENDULUM SWING  (Hold E)
+-- [A] WEB SWING  (Hold E) — true RopeConstraint pendulum physics.
+--      The web attaches ONLY to a real surface found by a 5-ray smart
+--      search; there is NO fake sky anchor, so webs never hang in air.
 --======================================================================
 local Swing = {
         Active = false, AnchorPart = nil, AnchorPos = nil, RopeLength = 0,
-        Attach0 = nil, HandAttach = nil, Beam = nil, PrevDir = nil, StartClock = 0,
+        Attach0 = nil, RootAttach = nil, Rope = nil,
+        HandAttach = nil, Beam = nil, PrevDir = nil, StartClock = 0,
 }
+
+-- tilt a camera direction upward by deg degrees
+local function tiltUp(dir, deg)
+        local a = math.rad(deg)
+        local d = dir * math.cos(a) + Vector3.new(0, math.sin(a), 0)
+        if d.Magnitude < 0.05 then
+                return dir
+        end
+        return d.Unit
+end
+
+-- 5-ray anchor search: straight, up +18°, up +35°, and two side rays.
+-- Every candidate must hit a REAL part above the root and pass the
+-- sharpness filter — otherwise the web does not fire at all.
+local function findSwingAnchor(rootPos)
+        local look  = Camera.CFrame.LookVector
+        local right = Camera.CFrame.RightVector
+        local rays = {
+                look,
+                tiltUp(look, 18),
+                tiltUp(look, 35),
+                tiltUp((look + right * 0.30).Unit, 12),
+                tiltUp((look - right * 0.30).Unit, 12),
+        }
+        for _, dir in ipairs(rays) do
+                local hit = Workspace:Raycast(
+                        Camera.CFrame.Position,
+                        dir * CONFIG.SwingMaxDistance,
+                        RayParams
+                )
+                if hit
+                        and hit.Position.Y > rootPos.Y + CONFIG.SwingMinHeightDiff
+                        and isSharpEnough(hit.Position, hit.Normal) then
+                        return hit
+                end
+        end
+        return nil
+end
 
 function Swing.Begin()
         if not (RootPart and Humanoid) then return end
@@ -531,41 +577,13 @@ function Swing.Begin()
 
         local rootPos = RootPart.Position
 
-        -- 1) try a real crosshair anchor first (max 350 studs)
-        local anchorPos, anchorPart
-        local hit = Workspace:Raycast(
-                Camera.CFrame.Position,
-                Camera.CFrame.LookVector * CONFIG.SwingMaxDistance,
-                RayParams
-        )
-        if hit
-                and hit.Position.Y > rootPos.Y + CONFIG.SwingMinHeightDiff
-                and isSharpEnough(hit.Position, hit.Normal) then
-                anchorPos, anchorPart = hit.Position, hit.Instance
-        else
-                -- 2) Insomniac-style sky web: virtual anchor ahead + above so
-                --    swinging works on ANY map, even with nothing overhead
-                local look = Camera.CFrame.LookVector
-                local flat = Vector3.new(look.X, 0, look.Z)
-                flat = (flat.Magnitude > 0.05) and flat.Unit or Vector3.new(0, 0, -1)
-                local dir = (flat + Vector3.new(0, math.clamp(look.Y, 0.3, 0.6), 0)).Unit
-                anchorPos = rootPos + dir * CONFIG.SwingVirtualDist
-                local minY = rootPos.Y + CONFIG.SwingVirtualMinHeight
-                if anchorPos.Y < minY then
-                        anchorPos = Vector3.new(anchorPos.X, minY, anchorPos.Z)
-                end
-                anchorPart = Instance.new("Part")
-                anchorPart.Name = "SpideyVirtualAnchor"
-                anchorPart.Anchored = true
-                anchorPart.CanCollide = false
-                anchorPart.CanQuery = false
-                anchorPart.CanTouch = false
-                anchorPart.CastShadow = false
-                anchorPart.Transparency = 1
-                anchorPart.Size = Vector3.new(0.2, 0.2, 0.2)
-                anchorPart.CFrame = CFrame.new(anchorPos)
-                anchorPart.Parent = FXFolder
+        -- REAL SURFACE ONLY: 5-ray smart anchor search. No fake sky webs —
+        -- if nothing real is hit, the web simply does not fire.
+        local hit = findSwingAnchor(rootPos)
+        if not hit then
+                return
         end
+        local anchorPos, anchorPart = hit.Position, hit.Instance
 
         releaseWebs()
         PointLaunch.Cancel()
@@ -575,56 +593,91 @@ function Swing.Begin()
         Swing.PrevDir = nil
         Swing.AnchorPart = anchorPart
         Swing.AnchorPos = anchorPos
-        Swing.RopeLength = math.max((anchorPos - rootPos).Magnitude, 6)
+        local dist = math.max((anchorPos - rootPos).Magnitude, 6)
+        Swing.RopeLength = dist * 0.96 -- slight pre-tension: catches you instantly
+
         Swing.Attach0 = anchorAttachment(anchorPart, anchorPos)
+        Swing.RootAttach = Instance.new("Attachment")
+        Swing.RootAttach.Name = "SpideySwingRoot"
+        Swing.RootAttach.Parent = RootPart
+
+        -- TRUE PHYSICS PENDULUM: engine-side RopeConstraint. The old hand-
+        -- rolled CFrame correction fought the solver and produced dangle,
+        -- not swing. Visible=false — the Beam is the visible strand.
+        Swing.Rope = Instance.new("RopeConstraint")
+        Swing.Rope.Attachment0 = Swing.Attach0
+        Swing.Rope.Attachment1 = Swing.RootAttach
+        Swing.Rope.Length = Swing.RopeLength
+        Swing.Rope.Restitution = 0
+        Swing.Rope.Visible = false
+        Swing.Rope.Parent = RootPart
+
         Swing.HandAttach = handAttachment(getWebHand(false))
         Swing.Beam = createWebBeam(Swing.Attach0, Swing.HandAttach)
         webMaid:Give(Swing.Attach0)
+        webMaid:Give(Swing.RootAttach)
+        webMaid:Give(Swing.Rope)
         webMaid:Give(Swing.HandAttach)
         webMaid:Give(Swing.Beam)
-        webMaid:Give(anchorPart) -- virtual anchors are cleaned up with the webs
+
+        -- LIFT-OFF IMPULSE: this is what makes holding E carry you forward
+        local look = Camera.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        flat = (flat.Magnitude > 0.05) and flat.Unit or Vector3.new(0, 0, -1)
+        local grounded = Humanoid.FloorMaterial ~= Enum.Material.Air
+        local impulse = look * CONFIG.SwingLaunchSpeed
+        if grounded then
+                impulse = impulse + Vector3.new(0, CONFIG.SwingLiftOff, 0)
+        end
+        RootPart.AssemblyLinearVelocity = RootPart.AssemblyLinearVelocity:Lerp(impulse, 0.7)
+
+        Humanoid.AutoRotate = false
+        Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
         StateManager.Set(StateManager.States.Swinging, true)
 end
 
 function Swing.Step(dt)
         if not Swing.Active or not (RootPart and RootPart.Parent) then return end
-
-        local anchorPos = Swing.Attach0 and Swing.Attach0.WorldPosition or Swing.AnchorPos
-        if not anchorPos then
+        if not Camera then
+                Camera = Workspace.CurrentCamera
+                if not Camera then return end
+        end
+        -- if another system destroyed the rope hardware, bail out cleanly
+        if not Swing.Rope or not Swing.Rope.Parent then
                 Swing.End(true)
                 return
         end
-        local handPos = (Swing.HandAttach and Swing.HandAttach.WorldPosition) or RootPart.Position
-        local vel = RootPart.AssemblyLinearVelocity
 
-        -- Hooke's-law spring tension toward the anchor
-        local toAnchor = anchorPos - handPos
-        if toAnchor.Magnitude > 0.05 then
-                local tensionDir = toAnchor.Unit
-                vel = vel + tensionDir * Workspace.Gravity * dt
+        -- keep the humanoid airborne so ground friction never fights the rope
+        local hState = Humanoid and Humanoid:GetState()
+        if Humanoid and Humanoid.Parent
+                and hState ~= Enum.HumanoidStateType.Freefall
+                and hState ~= Enum.HumanoidStateType.Physics then
+                Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
         end
 
-        -- WASD directional pumping
+        local vel = RootPart.AssemblyLinearVelocity
+        local horiz = Vector3.new(vel.X, 0, vel.Z)
+
+        -- continuous forward drive while holding E (pumps the pendulum arc)
+        if horiz.Magnitude < CONFIG.SwingMaxSpeed then
+                local look = Camera.CFrame.LookVector
+                local flatLook = Vector3.new(look.X, 0, look.Z)
+                flatLook = (flatLook.Magnitude > 0.05) and flatLook.Unit or Vector3.new(0, 0, -1)
+                local thrustDir = (horiz.Magnitude > 2) and horiz.Unit or flatLook
+                vel = vel + thrustDir * CONFIG.SwingThrust * dt
+        end
+
+        -- WASD steering; holding W reels the rope in (classic energy pump)
         local steer = getCameraSteer()
         if steer.Magnitude > 0.01 then
                 vel = vel + steer * CONFIG.SwingSteerAccel * dt
-        end
-
-        -- Rope-length pendulum constraint
-        local offset = RootPart.Position - anchorPos
-        local dist = offset.Magnitude
-        if dist > Swing.RopeLength and dist > 0.05 then
-                local radialDir = offset.Unit
-                local radialSpeed = vel:Dot(radialDir)
-                if radialSpeed > 0 then
-                        vel = vel - radialDir * radialSpeed -- cancel outward radial velocity
+                if moveKeys.W and Swing.Rope.Length > 14 then
+                        Swing.Rope.Length = math.max(Swing.Rope.Length - CONFIG.SwingWReel * dt, 14)
+                        Swing.RopeLength = Swing.Rope.Length
                 end
-                local corrected = anchorPos + radialDir * Swing.RopeLength
-                RootPart.CFrame = CFrame.new(corrected) * RootPart.CFrame.Rotation
-        end
-
-        -- Natural momentum decay when coasting (no WASD)
-        if steer.Magnitude <= 0.01 then
+        else
+                -- gentle coast decay when the stick is neutral
                 vel = Vector3.new(vel.X * CONFIG.SwingDragXZ, vel.Y, vel.Z * CONFIG.SwingDragXZ)
         end
         RootPart.AssemblyLinearVelocity = vel
@@ -665,10 +718,24 @@ function Swing.End(keepMomentum)
         Swing.AnchorPart = nil
         Swing.AnchorPos = nil
         Swing.Attach0 = nil
+        Swing.RootAttach = nil
+        Swing.Rope = nil
         Swing.HandAttach = nil
         Swing.Beam = nil
         Swing.PrevDir = nil
         releaseWebs()
+        -- release fling: a small upward pop when you let go mid-air
+        if keepMomentum ~= false and RootPart and RootPart.Parent
+                and Humanoid and Humanoid.Parent
+                and Humanoid.FloorMaterial == Enum.Material.Air then
+                local v = RootPart.AssemblyLinearVelocity
+                if v.Y < CONFIG.SwingReleasePop then
+                        RootPart.AssemblyLinearVelocity = Vector3.new(v.X, CONFIG.SwingReleasePop, v.Z)
+                end
+        end
+        if Humanoid and Humanoid.Parent then
+                Humanoid.AutoRotate = true
+        end
         if StateManager.Current == StateManager.States.Swinging then
                 StateManager.Set(StateManager.States.Idle, true)
         end
@@ -1371,6 +1438,8 @@ local function fullCleanup()
         Swing.AnchorPart = nil
         Swing.AnchorPos = nil
         Swing.Attach0 = nil
+        Swing.RootAttach = nil
+        Swing.Rope = nil
         Swing.HandAttach = nil
         Swing.Beam = nil
         PointLaunch.Pulling = false
@@ -1505,6 +1574,10 @@ local function mobileTrigger(index, isDown)
         elseif index == 3 then
                 if Wall.Crawling then
                         Wall.JumpOff()
+                        return
+                end
+                if StateManager.Current == StateManager.States.Swinging and Swing.Active then
+                        Swing.End(true)
                         return
                 end
                 if not PointLaunch.TryBoost() then
@@ -1804,7 +1877,7 @@ local function buildUI()
                 Size = UDim2.new(1, -90, 1, 0),
                 Position = UDim2.new(0, 24, 0, 0),
                 BackgroundTransparency = 1,
-                Text = "SPIDER-MAN MOVEMENT ENGINE v3.0",
+                Text = "SPIDER-MAN MOVEMENT ENGINE v3.2",
                 TextColor3 = THEME.Text,
                 Font = Enum.Font.GothamBold,
                 TextSize = 13,
@@ -1934,9 +2007,13 @@ local function handleKeyBegan(key)
         end
 
         if key == Moves[3].Key then
-                -- Space: wall jump-off > boost window > gap zip
+                -- Space: wall jump-off > swing release-jump > boost > gap zip
                 if Wall.Crawling or StateManager.Current == StateManager.States.WallSprinting then
                         Wall.JumpOff()
+                        return
+                end
+                if StateManager.Current == StateManager.States.Swinging and Swing.Active then
+                        Swing.End(true) -- Insomniac X: let go of the web with a hop
                         return
                 end
                 if not PointLaunch.TryBoost() and Moves[3].Enabled then
@@ -2293,4 +2370,4 @@ if LocalPlayer.Character then
         task.spawn(onCharacterAdded, LocalPlayer.Character)
 end
 
-print("[SPIDEY ENGINE v3.1] Loaded successfully — press RightShift to open the control panel.")
+print("[SPIDEY ENGINE v3.2] Loaded successfully — press RightShift to open the control panel.")
