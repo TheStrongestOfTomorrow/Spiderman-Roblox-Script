@@ -1,28 +1,34 @@
 --[[=====================================================================
-        SPIDER-MAN MOVEMENT ENGINE v3.0  •  Single-File Client LocalScript
+        SPIDER-MAN MOVEMENT ENGINE v3.1  •  Single-File Client LocalScript
         =====================================================================
+        CONTROLS (Insomniac's Spider-Man inspired)
+          • E (hold)         Web Swing — auto sky-anchor fallback so it works
+                             on ANY map; release to let go, WASD to pump
+          • F (tap)          Point Launch — Space within 3s of arrival = boost
+          • Space            Tight Gap Zip (face a narrow gap) / wall jump-off
+          • R (x2 + S)       Dual-Web Ground Slingshot
+          • LeftShift (hold) Sprint on the ground AND on walls (R2 parkour)
+          • Wall Climb       PASSIVE — run or jump at any wall to stick and
+                             climb; Space jumps off; toggle in the UI panel
+          • G (hold) + WASD  Air Tricks (frontflip / backflip / barrel roll)
+          • LeftShift        Ground Slide on fast landings (> 45 speed)
+          • RightShift       Toggle the control panel
+
         FEATURES
-          • Pendulum Swing  (sharpness-filtered anchors, Hooke's-law tension,
-            rope-length pendulum constraint, 18° procedural body roll)
-          • Point Launch    (zip-to-point pull + 3-second Space boost window)
-          • Tight Gap Zip   (parallel-ray gap detection, pass-through lerp)
-          • Dual-Web Ground Slingshot (tension physics, progressive slowdown,
-            heat-up web colors, manual + automatic release)
-          • Wall Crawl / Wall Sprint / Wall Eject
-          • Procedural Air Tricks (frontflip / backflip / barrel rolls with
-            Motor6D tuck poses and auto recovery — zero Animation IDs)
-          • Ground Slide (landing momentum slide, zero friction)
-          • Full UI panel (RightShift): per-move toggles, key re-binds, reset
-            buttons, mobile touch canvas with drag / lock layout modes
+          • Pendulum Swing with sharpness-filtered anchors, Hooke's-law
+            tension, rope constraint, 18° procedural body roll
+          • Point Launch, Tight Gap Zip, Dual-Web Slingshot, Ground Slide
+          • Passive wall crawl / wall sprint / wall jump-off
+          • Procedural Air Tricks — Motor6D tuck poses, zero Animation IDs
+          • Full UI panel: per-move toggles, re-binds, resets, mobile canvas
           • Maid-pattern garbage collection on every state change / death
 
         TECHNICAL NOTES
-          • 100% client-side. No RemoteEvents, no server instancing, no
-            external assets beyond the three allowed engine web visuals.
+          • 100% client-side. No RemoteEvents, no server instancing.
+          • Webs are plain white local Beams — NO external texture or mesh
+            assets, so visuals render instantly on every executor.
           • Movement is applied to LocalPlayer.Character.HumanoidRootPart via
-            AssemblyLinearVelocity / CFrame writes. The client owns its own
-            character physics, so Roblox network-ownership replication syncs
-            the motion to other players natively — web beams stay local-only.
+            AssemblyLinearVelocity / CFrame writes (client owns its physics).
           • Zero Animation IDs. All poses are procedural (Motor6D C0 offsets).
           • Re-running this script auto-destroys the previous instance.
 =====================================================================--]]
@@ -59,6 +65,8 @@ local CONFIG = {
         SwingDragXZ        = 0.982, -- per-frame horizontal drag (no WASD held)
         SwingRollMaxDeg    = 18,    -- procedural body roll clamp (degrees)
         SwingRollFactor    = 0.2,   -- roll gain (per spec factor)
+        SwingVirtualDist      = 65, -- sky-web virtual anchor distance (studs)
+        SwingVirtualMinHeight = 32, -- virtual anchor min height above root
 
         -- [B] Point Launch
         LaunchSpeed        = 180,   -- linear pull speed toward target
@@ -80,14 +88,17 @@ local CONFIG = {
         SlingMinT          = 0.50,  -- minimum tension for manual release
         SlingLaunchAngle   = 35,    -- upward launch angle (degrees)
 
-        -- [E] Wall systems
+        -- [E] Wall systems (passive climb, Insomniac parkour style)
         CrawlSpeed         = 14,    -- wall crawl speed (studs/sec)
         SprintSpeed        = 38,    -- wall sprint speed (studs/sec)
         WallStickOffset    = 3,     -- hover distance from wall surface
         WallDetectDist     = 7,     -- forward wall detection range
-        EjectUpSpeed       = 85,    -- wall eject vertical impulse
-        EjectInwardSpeed   = 15,    -- wall eject inward (toward wall) impulse
-        EjectLookSpeed     = 35,    -- wall eject camera-look impulse
+        PassiveWallDist    = 4.5,   -- auto-attach when a wall is this close
+        ReattachCooldown   = 0.6,   -- seconds before re-attach after jump-off
+        WallJumpUp         = 55,    -- Space jump-off vertical impulse
+        WallJumpOut        = 25,    -- Space jump-off push away from wall
+        WallJumpLook       = 15,    -- Space jump-off camera-look impulse
+        RunSpeed           = 26,    -- ground sprint speed (LeftShift hold)
 
         -- [F] Air Tricks
         TrickFlipRate      = 12,    -- front/backflip degrees per frame
@@ -110,10 +121,7 @@ local CONFIG = {
         FOVMax             = 110,
         FOVLerp            = 0.1,
 
-        -- Allowed engine visual assets
-        WebTexture   = "rbxassetid://1082822557",
-        ImpactMeshId = "rbxassetid://515312384",
-        ImpactTexId  = "rbxassetid://515312812",
+        -- Web visuals: plain local white beam, zero external assets
         WebColor     = Color3.fromRGB(240, 240, 255),
 }
 
@@ -215,8 +223,8 @@ local Moves = {
         [2] = { Name = "Point Launch",        Default = Enum.KeyCode.F,         Key = Enum.KeyCode.F,         Enabled = true },
         [3] = { Name = "Tight Gap Zip",       Default = Enum.KeyCode.Space,     Key = Enum.KeyCode.Space,     Enabled = true },
         [4] = { Name = "Dual-Web Slingshot",  Default = Enum.KeyCode.R,         Key = Enum.KeyCode.R,         Enabled = true },
-        [5] = { Name = "Wall Crawl & Sprint", Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
-        [6] = { Name = "Wall Eject",          Default = Enum.KeyCode.E,         Key = Enum.KeyCode.E,         Enabled = true },
+        [5] = { Name = "Sprint (Ground/Wall)", Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
+        [6] = { Name = "Wall Climb (Passive)", Default = nil,                    Key = nil,                    Enabled = true },
         [7] = { Name = "Air Tricks",          Default = Enum.KeyCode.G,         Key = Enum.KeyCode.G,         Enabled = true },
         [8] = { Name = "Ground Slide",        Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
 }
@@ -225,9 +233,10 @@ local Moves = {
 -- RUNTIME STATE
 --======================================================================
 local Character, Humanoid, RootPart
-local stuckTimer  = 0
-local shakeTimer  = 0
-local shiftHeld   = false
+local stuckTimer   = 0
+local shakeTimer   = 0
+local shiftHeld    = false
+local sprintActive = false
 local moveKeys    = { W = false, A = false, S = false, D = false }
 local MOVE_KEYS_MAP = {
         [Enum.KeyCode.W] = "W", [Enum.KeyCode.Up]    = "W",
@@ -396,10 +405,7 @@ local function createWebBeam(attachment0, attachment1)
         local beam = Instance.new("Beam")
         beam.Attachment0 = attachment0
         beam.Attachment1 = attachment1
-        beam.Texture = CONFIG.WebTexture
-        beam.TextureSpeed = 0.35
-        beam.TextureLength = 3
-        beam.TextureMode = Enum.TextureMode.Wrap
+        -- plain white strand: no Texture asset so it renders on every executor
         beam.Width0 = 0.25
         beam.Width1 = 0.08
         beam.Color = ColorSequence.new(CONFIG.WebColor)
@@ -411,28 +417,7 @@ local function createWebBeam(attachment0, attachment1)
         return beam
 end
 
-local function createImpactMesh(position, normal)
-        local part = Instance.new("Part")
-        part.Name = "SpideyWebImpact"
-        part.Anchored = true
-        part.CanCollide = false
-        part.CanQuery = false
-        part.CanTouch = false
-        part.CastShadow = false
-        part.Massless = true
-        part.Size = Vector3.new(0.2, 0.2, 0.2)
-        part.CFrame = CFrame.lookAt(position, position + normal)
-        local mesh = Instance.new("SpecialMesh")
-        mesh.MeshType = Enum.MeshType.FileMesh
-        mesh.MeshId = CONFIG.ImpactMeshId
-        mesh.TextureId = CONFIG.ImpactTexId
-        mesh.Scale = Vector3.new(0.05, 0.05, 0.05)
-        mesh.Parent = part
-        part.Parent = FXFolder
-        return part
-end
-
--- Destroys every active web visual (beams, attachments, impact meshes)
+-- Destroys every active web visual (beams, attachments, virtual anchors)
 local function releaseWebs()
         webMaid:Cleanup()
 end
@@ -538,25 +523,48 @@ local Swing = {
 function Swing.Begin()
         if not (RootPart and Humanoid) then return end
         if Swing.Active then return end
-        if Wall and Wall.Crawling then return end -- eject first (E), then swing
         if StateManager.Current == StateManager.States.SlingshotCharging then return end
+        if not Camera then
+                Camera = Workspace.CurrentCamera
+                if not Camera then return end
+        end
 
-        -- 1) Crosshair raycast (max 350 studs)
+        local rootPos = RootPart.Position
+
+        -- 1) try a real crosshair anchor first (max 350 studs)
+        local anchorPos, anchorPart
         local hit = Workspace:Raycast(
                 Camera.CFrame.Position,
                 Camera.CFrame.LookVector * CONFIG.SwingMaxDistance,
                 RayParams
         )
-        if not hit then return end
-
-        -- 2) Height check: anchor must be > 5 studs above the root
-        if hit.Position.Y <= RootPart.Position.Y + CONFIG.SwingMinHeightDiff then
-                return
-        end
-
-        -- 3) Geometry sharpness filter (domes rejected, corners accepted)
-        if not isSharpEnough(hit.Position, hit.Normal) then
-                return
+        if hit
+                and hit.Position.Y > rootPos.Y + CONFIG.SwingMinHeightDiff
+                and isSharpEnough(hit.Position, hit.Normal) then
+                anchorPos, anchorPart = hit.Position, hit.Instance
+        else
+                -- 2) Insomniac-style sky web: virtual anchor ahead + above so
+                --    swinging works on ANY map, even with nothing overhead
+                local look = Camera.CFrame.LookVector
+                local flat = Vector3.new(look.X, 0, look.Z)
+                flat = (flat.Magnitude > 0.05) and flat.Unit or Vector3.new(0, 0, -1)
+                local dir = (flat + Vector3.new(0, math.clamp(look.Y, 0.3, 0.6), 0)).Unit
+                anchorPos = rootPos + dir * CONFIG.SwingVirtualDist
+                local minY = rootPos.Y + CONFIG.SwingVirtualMinHeight
+                if anchorPos.Y < minY then
+                        anchorPos = Vector3.new(anchorPos.X, minY, anchorPos.Z)
+                end
+                anchorPart = Instance.new("Part")
+                anchorPart.Name = "SpideyVirtualAnchor"
+                anchorPart.Anchored = true
+                anchorPart.CanCollide = false
+                anchorPart.CanQuery = false
+                anchorPart.CanTouch = false
+                anchorPart.CastShadow = false
+                anchorPart.Transparency = 1
+                anchorPart.Size = Vector3.new(0.2, 0.2, 0.2)
+                anchorPart.CFrame = CFrame.new(anchorPos)
+                anchorPart.Parent = FXFolder
         end
 
         releaseWebs()
@@ -565,16 +573,16 @@ function Swing.Begin()
         Swing.Active = true
         Swing.StartClock = os.clock()
         Swing.PrevDir = nil
-        Swing.AnchorPart = hit.Instance
-        Swing.AnchorPos = hit.Position
-        Swing.RopeLength = math.max((hit.Position - RootPart.Position).Magnitude, 6)
-        Swing.Attach0 = anchorAttachment(hit.Instance, hit.Position)
+        Swing.AnchorPart = anchorPart
+        Swing.AnchorPos = anchorPos
+        Swing.RopeLength = math.max((anchorPos - rootPos).Magnitude, 6)
+        Swing.Attach0 = anchorAttachment(anchorPart, anchorPos)
         Swing.HandAttach = handAttachment(getWebHand(false))
         Swing.Beam = createWebBeam(Swing.Attach0, Swing.HandAttach)
         webMaid:Give(Swing.Attach0)
         webMaid:Give(Swing.HandAttach)
         webMaid:Give(Swing.Beam)
-        webMaid:Give(createImpactMesh(hit.Position, hit.Normal))
+        webMaid:Give(anchorPart) -- virtual anchors are cleaned up with the webs
         StateManager.Set(StateManager.States.Swinging, true)
 end
 
@@ -707,7 +715,6 @@ function PointLaunch.Begin()
         webMaid:Give(handAtt)
         webMaid:Give(a0)
         webMaid:Give(beam)
-        webMaid:Give(createImpactMesh(hit.Position, hit.Normal))
 
         StateManager.Set(StateManager.States.PointLaunching, true)
 end
@@ -945,7 +952,6 @@ function Sling.Begin()
                 webMaid:Give(Sling.AttachA)
                 webMaid:Give(Sling.HandA)
                 webMaid:Give(Sling.BeamA)
-                webMaid:Give(createImpactMesh(hit.Position, hit.Normal))
                 StateManager.Set(StateManager.States.SlingshotCharging, true)
 
         elseif Sling.Phase == 1 then
@@ -959,7 +965,6 @@ function Sling.Begin()
                 webMaid:Give(Sling.AttachB)
                 webMaid:Give(Sling.HandB)
                 webMaid:Give(Sling.BeamB)
-                webMaid:Give(createImpactMesh(hit.Position, hit.Normal))
                 local mid = (Sling.AnchorA.Position + Sling.AnchorB.Position) * 0.5
                 Sling.InitialDist = (RootPart.Position - mid).Magnitude
                 Sling.T = 0
@@ -1057,6 +1062,7 @@ end
 Wall = {
         Crawling = false, Sprinting = false,
         WallNormal = nil, WallPart = nil, LastTravel = nil,
+        CooldownUntil = 0,
 }
 
 local function castWall()
@@ -1088,23 +1094,10 @@ local function wallPostureCFrame(pos, normal, sprint, travelDir)
         return CFrame.lookAt(pos, pos + normal) * CFrame.Angles(-math.pi / 2, 0, 0)
 end
 
-function Wall.Begin()
-        if StateManager.Current == StateManager.States.SlingshotCharging then return end
+function Wall.Attach(hit)
         if not (RootPart and Humanoid) then return end
-
-        if Wall.Crawling then
-                -- toggle between crawl and sprint
-                Wall.Sprinting = not Wall.Sprinting
-                if Wall.Sprinting then
-                        StateManager.Set(StateManager.States.WallSprinting, true)
-                else
-                        StateManager.Set(StateManager.States.WallCrawling, true)
-                end
-                return
-        end
-
-        local hit = castWall()
-        if not hit then return end
+        if Wall.Crawling then return end
+        if StateManager.Current == StateManager.States.SlingshotCharging then return end
 
         releaseWebs()
         if Swing.Active then Swing.End(true) end
@@ -1123,6 +1116,17 @@ function Wall.Begin()
         RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
 end
 
+function Wall.Begin()
+        -- manual attach attempt (mobile CLIMB button); keyboard is passive
+        if not (RootPart and Humanoid) then return end
+        if Wall.Crawling then return end
+        if StateManager.Current == StateManager.States.SlingshotCharging then return end
+        local hit = castWall()
+        if hit then
+                Wall.Attach(hit)
+        end
+end
+
 function Wall.Step(dt)
         if not Wall.Crawling or not (RootPart and Humanoid) then return end
         local n = Wall.WallNormal
@@ -1139,6 +1143,13 @@ function Wall.Step(dt)
         end
         n = probe.Normal
         Wall.WallNormal = n
+
+        -- wall sprint follows the Shift key (Insomniac R2 parkour)
+        local wantSprint = Moves[5].Enabled and shiftHeld
+        if wantSprint ~= Wall.Sprinting then
+                Wall.Sprinting = wantSprint
+                StateManager.Set(wantSprint and StateManager.States.WallSprinting or StateManager.States.WallCrawling, true)
+        end
 
         local speed = Wall.Sprinting and CONFIG.SprintSpeed or CONFIG.CrawlSpeed
         local x, z = getInputVector()
@@ -1172,6 +1183,7 @@ function Wall.Detach()
         Wall.Sprinting = false
         Wall.WallNormal = nil
         Wall.WallPart = nil
+        Wall.CooldownUntil = os.clock() + CONFIG.ReattachCooldown
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
                 Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
@@ -1182,29 +1194,16 @@ function Wall.Detach()
         end
 end
 
-function Wall.Eject()
+-- Insomniac-style X / Space jump-off: strong hop away from the wall
+function Wall.JumpOff()
         if not Wall.Crawling or not RootPart then return end
         local n = Wall.WallNormal or Camera.CFrame.LookVector
-
-        -- upward probe past the roof edge (landing surface information)
-        local roofProbe = Workspace:Raycast(RootPart.Position, Vector3.new(0, 1, 0) * 150, RayParams)
-
-        -- explosive eject vector: UP * 85 + inward * 15 + look * 35
-        local ejectVelocity = Vector3.new(0, 1, 0) * CONFIG.EjectUpSpeed
-                + (n * -CONFIG.EjectInwardSpeed)
-                + (Camera.CFrame.LookVector * CONFIG.EjectLookSpeed)
-
         Wall.Detach()
-        StateManager.Set(StateManager.States.WallEjecting, true)
-        RootPart.AssemblyLinearVelocity = ejectVelocity
-
-        -- auto-rotate upright to land cleanly on the roof surface
-        startUprightRecovery(0.35, function()
-                if StateManager.Current == StateManager.States.WallEjecting then
-                        StateManager.Set(StateManager.States.Idle, true)
-                end
-        end)
-        cameraPulse(0.3)
+        RootPart.AssemblyLinearVelocity =
+                n * CONFIG.WallJumpOut
+                + Vector3.new(0, CONFIG.WallJumpUp, 0)
+                + Camera.CFrame.LookVector * CONFIG.WallJumpLook
+        cameraPulse(0.2)
 end
 
 --======================================================================
@@ -1401,6 +1400,7 @@ local function fullCleanup()
         Recovery.Active = false
         Recovery.After = nil
         stuckTimer = 0
+        sprintActive = false
         releaseWebs()
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
@@ -1475,22 +1475,24 @@ local mobileDrag = nil
 
 local MOBILE_SHORT = {
         [1] = "SWING", [2] = "LAUNCH", [3] = "ZIP",   [4] = "SLING",
-        [5] = "CRAWL", [6] = "EJECT",  [7] = "TRICK", [8] = "SLIDE",
+        [5] = "RUN",   [6] = "CLIMB",  [7] = "TRICK", [8] = "SLIDE",
 }
 
 local function mobileTrigger(index, isDown)
         if not isDown then
                 if index == 1 and Swing.Active then
                         Swing.End(true)
-                elseif index == 5 and Wall.Sprinting then
+                elseif index == 5 then
+                        shiftHeld = false
                         Wall.Sprinting = false
                         if StateManager.Current == StateManager.States.WallSprinting then
                                 StateManager.Set(StateManager.States.WallCrawling, true)
                         end
+                        if Slide.Active then
+                                Slide.End()
+                        end
                 elseif index == 7 and Tricks.Active then
                         Tricks.End()
-                elseif index == 8 and Slide.Active then
-                        Slide.End()
                 end
                 return
         end
@@ -1502,11 +1504,7 @@ local function mobileTrigger(index, isDown)
                 PointLaunch.Begin()
         elseif index == 3 then
                 if Wall.Crawling then
-                        local n = Wall.WallNormal or Camera.CFrame.LookVector
-                        Wall.Detach()
-                        if RootPart then
-                                RootPart.AssemblyLinearVelocity = n * 20 + Vector3.new(0, 12, 0)
-                        end
+                        Wall.JumpOff()
                         return
                 end
                 if not PointLaunch.TryBoost() then
@@ -1515,11 +1513,10 @@ local function mobileTrigger(index, isDown)
         elseif index == 4 then
                 Sling.Begin()
         elseif index == 5 then
-                Wall.Begin()
+                shiftHeld = true -- hold RUN: ground sprint + wall sprint
+                Slide.TryBegin()
         elseif index == 6 then
-                if Wall.Crawling then
-                        Wall.Eject()
-                end
+                Wall.Begin() -- manual attach (climb is passive on keyboard)
         elseif index == 7 then
                 Tricks.Begin()
         elseif index == 8 then
@@ -1663,7 +1660,7 @@ local function buildMoveRow(parent, move, index)
                 Size = UDim2.fromOffset(116, 24),
                 Position = UDim2.new(0, 214, 0.5, -12),
                 BackgroundColor3 = THEME.Bind,
-                Text = move.Key.Name,
+                Text = move.Key and move.Key.Name or "AUTO",
                 TextColor3 = THEME.Text,
                 Font = Enum.Font.Code,
                 TextSize = 12,
@@ -1698,6 +1695,7 @@ local function buildMoveRow(parent, move, index)
         end)
 
         bindBtn.Activated:Connect(function()
+                if not move.Key then return end -- passive system: nothing to bind
                 captureMove = index
                 bindBtn.Text = "...Press Key..."
                 bindBtn.TextColor3 = THEME.Yellow
@@ -1708,7 +1706,7 @@ local function buildMoveRow(parent, move, index)
                 if captureMove == index then
                         captureMove = nil
                 end
-                bindBtn.Text = move.Key.Name
+                bindBtn.Text = move.Key and move.Key.Name or "AUTO"
                 bindBtn.TextColor3 = THEME.Text
         end)
 end
@@ -1919,17 +1917,15 @@ end
 -- KEYBOARD ROUTING
 --======================================================================
 local function handleKeyBegan(key)
-        -- E is shared: Wall Eject has priority while attached to a wall
-        if key == Moves[1].Key or key == Moves[6].Key then
-                if Wall.Crawling or StateManager.Current == StateManager.States.WallSprinting then
-                        if Moves[6].Enabled then
-                                Wall.Eject()
-                                return
+        -- E: web swing ONLY (Insomniac R2) — detaches from walls first
+        if key == Moves[1].Key then
+                if Moves[1].Enabled then
+                        if Wall.Crawling then
+                                Wall.Detach()
                         end
-                elseif Moves[1].Enabled and key == Moves[1].Key then
                         Swing.Begin()
-                        return
                 end
+                return
         end
 
         if key == Moves[2].Key and Moves[2].Enabled then
@@ -1940,11 +1936,7 @@ local function handleKeyBegan(key)
         if key == Moves[3].Key then
                 -- Space: wall jump-off > boost window > gap zip
                 if Wall.Crawling or StateManager.Current == StateManager.States.WallSprinting then
-                        local n = Wall.WallNormal or Camera.CFrame.LookVector
-                        Wall.Detach()
-                        if RootPart then
-                                RootPart.AssemblyLinearVelocity = n * 20 + Vector3.new(0, 12, 0)
-                        end
+                        Wall.JumpOff()
                         return
                 end
                 if not PointLaunch.TryBoost() and Moves[3].Enabled then
@@ -1958,11 +1950,9 @@ local function handleKeyBegan(key)
                 return
         end
 
-        -- LeftShift is shared: wall attach/sprint toggle + ground slide
+        -- LeftShift: hold to sprint on ground and walls + fast-landing slide
         if key == Moves[5].Key or key == Moves[8].Key then
-                if Moves[5].Enabled then
-                        Wall.Begin()
-                end
+                shiftHeld = true
                 if Moves[8].Enabled then
                         Slide.TryBegin()
                 end
@@ -2140,6 +2130,46 @@ track(RunService.Heartbeat:Connect(function(dt)
                 end
         end
 
+        -- 1.5) passive wall attach (Insomniac parkour) — run/jump into walls
+        if not Wall.Crawling
+                and Moves[6].Enabled
+                and os.clock() > Wall.CooldownUntil
+                and StateManager.Current == StateManager.States.Idle then
+                local look = Camera and Camera.CFrame.LookVector
+                if look then
+                        local flatLook = Vector3.new(look.X, 0, look.Z)
+                        if flatLook.Magnitude > 0.05 then
+                                local probe = Workspace:Raycast(
+                                        RootPart.Position,
+                                        flatLook.Unit * CONFIG.PassiveWallDist,
+                                        RayParams
+                                )
+                                if probe and math.abs(probe.Normal.Y) < 0.3 then
+                                        local airborne = Humanoid.FloorMaterial == Enum.Material.Air
+                                        local runningAtWall = moveKeys.W
+                                                and look:Dot(probe.Normal * -1) > 0.45
+                                        if airborne or runningAtWall then
+                                                Wall.Attach(probe)
+                                        end
+                                end
+                        end
+                end
+        end
+
+        -- 1.6) ground sprint (LeftShift hold) — WalkSpeed written on transitions only
+        local wantSprint = Moves[5].Enabled and shiftHeld
+                and not Wall.Crawling and Sling.Phase ~= 2
+                and Humanoid.FloorMaterial ~= Enum.Material.Air
+                and StateManager.Current ~= StateManager.States.SlingshotCharging
+                and StateManager.Current ~= StateManager.States.PointLaunching
+        if wantSprint and not sprintActive then
+                sprintActive = true
+                Humanoid.WalkSpeed = CONFIG.RunSpeed
+        elseif not wantSprint and sprintActive then
+                sprintActive = false
+                Humanoid.WalkSpeed = Rig.DefaultWalkSpeed
+        end
+
         -- 2) per-state physics dispatch
         local st = StateManager.Current
         if st == StateManager.States.Swinging then
@@ -2263,4 +2293,4 @@ if LocalPlayer.Character then
         task.spawn(onCharacterAdded, LocalPlayer.Character)
 end
 
-print("[SPIDEY ENGINE v3.0-patch1] Loaded successfully — press RightShift to open the control panel.")
+print("[SPIDEY ENGINE v3.1] Loaded successfully — press RightShift to open the control panel.")
