@@ -1,4 +1,4 @@
-# SPIDER-MAN MOVEMENT ENGINE v3.2 — Roblox (Single-File LocalScript)
+# SPIDER-MAN MOVEMENT ENGINE v3.3 — Roblox (Single-File LocalScript)
 
 A complete, self-contained, **client-side** Spider-Man movement engine for Roblox.
 One script. Zero server dependencies. Zero RemoteEvents. **Zero external assets** — webs are plain white local Beams, so visuals render instantly on every executor. All animations are procedural (no Animation IDs).
@@ -12,9 +12,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 ```
 
 > **Executor caching the old file?** Append a version tag to bust the cache:
-> `loadstring(game:HttpGet("...spiderman.lua?v=3.2"))()`
+> `loadstring(game:HttpGet("...spiderman.lua?v=3.3"))()`
 
-- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.2]`**.
+- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.3]`**.
 - Press **RightShift** in-game to open / hide the control panel.
 - Re-executing the script automatically destroys the previous instance (no duplicates).
 - Everything cleans itself up on death / respawn (Maid garbage-collection pattern).
@@ -42,8 +42,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 **Space** priority: wall jump-off > swing release-jump (Insomniac X) > Point Launch boost (within 3 s of arrival) > Tight Gap Zip.
 **E** is swing-only — no shared keybinds.
 
-## UI Panel (RightShift)
+## UI Panel (RightShift / X button / floating icon)
 
+- **Mobile-friendly toggle** — close the panel with its **X button** (top-right of the header); a small movable red **S icon** appears on the right edge — **tap it to re-open** the panel, **drag it** anywhere to keep it out of the way (mobile players cannot press RightShift; desktop can still use RightShift).
 - **Movable header** — drag the title bar (mouse or touch delta) to reposition the 450x380 dark-glass panel.
 - **Per-move toggle switch** — green = active, red = disabled. Disabling a move blocks its input listener.
 - **Keybind rebind button** — shows the active `Enum.KeyCode.Name`; click it, press any key to rebind (`ESC` cancels).
