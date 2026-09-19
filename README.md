@@ -1,4 +1,4 @@
-# SPIDER-MAN MOVEMENT ENGINE v3.1 — Roblox (Single-File LocalScript)
+# SPIDER-MAN MOVEMENT ENGINE v3.2 — Roblox (Single-File LocalScript)
 
 A complete, self-contained, **client-side** Spider-Man movement engine for Roblox.
 One script. Zero server dependencies. Zero RemoteEvents. **Zero external assets** — webs are plain white local Beams, so visuals render instantly on every executor. All animations are procedural (no Animation IDs).
@@ -12,9 +12,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 ```
 
 > **Executor caching the old file?** Append a version tag to bust the cache:
-> `loadstring(game:HttpGet("...spiderman.lua?v=3.1"))()`
+> `loadstring(game:HttpGet("...spiderman.lua?v=3.2"))()`
 
-- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.1]`**.
+- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.2]`**.
 - Press **RightShift** in-game to open / hide the control panel.
 - Re-executing the script automatically destroys the previous instance (no duplicates).
 - Everything cleans itself up on death / respawn (Maid garbage-collection pattern).
@@ -30,7 +30,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 
 | # | Move | Key | Mode |
 |---|------|-----|------|
-| 1 | Pendulum Swing | `E` | **Hold** — sky-web fallback works on ANY map; WASD to pump |
+| 1 | Web Swing | `E` | **Hold** — fires only at a REAL surface (5-ray smart anchor search); W reels in, WASD to pump |
 | 2 | Point Launch | `F` | Tap |
 | 3 | Tight Gap Zip | `Space` | Tap (face a narrow gap) / **wall jump-off** |
 | 4 | Dual-Web Slingshot | `R` | Tap x2, walk back with `S`, tap `R` to release |
@@ -39,8 +39,8 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 | 7 | Air Tricks | `G` + WASD | Hold in freefall |
 | 8 | Ground Slide | `LeftShift` | Auto on fast landings (> 45 speed) |
 
-**Space** priority: wall jump-off > Point Launch boost (within 3 s of arrival) > Tight Gap Zip.
-**E** is now swing-only — no more shared keybinds.
+**Space** priority: wall jump-off > swing release-jump (Insomniac X) > Point Launch boost (within 3 s of arrival) > Tight Gap Zip.
+**E** is swing-only — no shared keybinds.
 
 ## UI Panel (RightShift)
 
@@ -53,7 +53,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 
 ## Mechanics Highlights
 
-- **Pendulum Swing** — tries a real crosshair anchor first (350 studs, height + sharpness filters: domes rejected, roof lips and flat faces accepted); if none is found it throws an **Insomniac-style sky web** to a virtual anchor ahead-above, so swinging works on ANY map. Hooke's-law tension (`Velocity += TensionDir * Gravity * dt`), rope-length pendulum constraint, 18° procedural body roll, momentum decay (`0.982` drag) when coasting.
+- **Web Swing (true RopeConstraint physics)** — a 5-ray smart search (straight, +18°, +35°, two side rays) hunts for a **real surface** within 350 studs; the web attaches only to an actual part and **never hangs in empty air** — if nothing valid is hit, no web fires. A `RopeConstraint` between the anchor and your root is the pendulum (the physics engine enforces the arc — no CFrame teleporting). On attach you get an instant **launch impulse** (crosshair look * 62, +18 up when grounded), a continuous **forward drive** of 40 studs/s² while holding E (capped at 125), `W` **reels the rope in** for the classic energy pump, and releasing mid-air flings you with an upward pop. 18° procedural body roll; humanoid is held in Freefall so ground friction never fights the rope.
 - **Point Launch** — `F` renders a web and pulls at 180 studs/s; arrival within 4.5 studs opens a **3-second window**: `Space` = `Look * 130 + Up * 45` boost; after 3 s the stored momentum resets and `Space` performs a default jump.
 - **Tight Gap Zip** — two parallel shoulder rays (3.5 studs apart) detect opposing surfaces < 8 studs apart, then lerp you through the gap in 0.12 s with collision bypass and a `Look * (speed + 25)` exit boost.
 - **Dual-Web Slingshot** — Phase 1 anchors left web to LeftHand, Phase 2 anchors right web to RightHand. Walking backward builds tension `T = clamp((dist - initial) / maxStretch, 0, 1)`: WalkSpeed `16 * (1 - T^1.5)`, FOV ramps 70 to 110, webs heat White > Light Yellow > Deep Red. Release at `T >= 0.50` (tap R) or automatically at `T = 1.0` for `Dir * T * 240` launch at 35° elevation.
