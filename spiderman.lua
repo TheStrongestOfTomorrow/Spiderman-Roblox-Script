@@ -1,5 +1,5 @@
 --[[=====================================================================
-        SPIDER-MAN MOVEMENT ENGINE v3.2  •  Single-File Client LocalScript
+        SPIDER-MAN MOVEMENT ENGINE v3.3  •  Single-File Client LocalScript
         =====================================================================
         CONTROLS (Insomniac's Spider-Man inspired)
           • E (hold)         Web Swing — fires ONLY at a real surface (5-ray
@@ -13,7 +13,8 @@
                              climb; Space jumps off; toggle in the UI panel
           • G (hold) + WASD  Air Tricks (frontflip / backflip / barrel roll)
           • LeftShift        Ground Slide on fast landings (> 45 speed)
-          • RightShift       Toggle the control panel
+          • RightShift / X   Toggle the control panel — a movable floating
+                             icon re-opens it (mobile-friendly)
 
         FEATURES
           • Web Swing with 5-ray real-surface anchor search, engine
@@ -1490,6 +1491,9 @@ local GUI = nil
 local uiRefs = { BindButtons = {}, ResetButtons = {}, Toggles = {}, Knobs = {} }
 local captureMove = nil
 local panelVisible = true
+local uiMain = nil     -- the draggable main panel frame
+local panelIcon = nil  -- floating re-open icon (shown while panel is hidden)
+local togglePanel      -- forward-declared: header X button + icon call it
 
 local THEME = {
         Background = Color3.fromRGB(20, 20, 25),
@@ -1853,6 +1857,7 @@ local function buildUI()
         outline.Color = Color3.fromRGB(120, 120, 150)
         outline.Transparency = 0.55
         outline.Parent = main
+        uiMain = main
 
         -- draggable header
         local header = make("Frame", {
@@ -1877,7 +1882,7 @@ local function buildUI()
                 Size = UDim2.new(1, -90, 1, 0),
                 Position = UDim2.new(0, 24, 0, 0),
                 BackgroundTransparency = 1,
-                Text = "SPIDER-MAN MOVEMENT ENGINE v3.2",
+                Text = "SPIDER-MAN MOVEMENT ENGINE v3.3",
                 TextColor3 = THEME.Text,
                 Font = Enum.Font.GothamBold,
                 TextSize = 13,
@@ -1887,7 +1892,7 @@ local function buildUI()
 
         make("TextLabel", {
                 Size = UDim2.new(0, 60, 1, 0),
-                Position = UDim2.new(1, -66, 0, 0),
+                Position = UDim2.new(1, -104, 0, 0),
                 BackgroundTransparency = 1,
                 Text = "RShift",
                 TextColor3 = THEME.SubText,
@@ -1895,6 +1900,25 @@ local function buildUI()
                 TextSize = 11,
                 TextXAlignment = Enum.TextXAlignment.Right,
         }, header)
+
+        -- close button: mobile players cannot press RightShift
+        local closeBtn = make("TextButton", {
+                Size = UDim2.fromOffset(26, 26),
+                Position = UDim2.new(1, -34, 0.5, -13),
+                BackgroundColor3 = THEME.Bind,
+                Text = "X",
+                TextColor3 = THEME.Text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 13,
+                BorderSizePixel = 0,
+                AutoButtonColor = false,
+        }, header)
+        addCorner(closeBtn, 6)
+        closeBtn.Activated:Connect(function()
+                if panelVisible then
+                        togglePanel()
+                end
+        end)
 
         local scroll = make("ScrollingFrame", {
                 Name = "Rows",
@@ -1942,6 +1966,48 @@ local function buildUI()
                 end
         end)
 
+        -- floating re-open icon: movable; a tap (no drag) re-opens the panel.
+        -- Mobile players cannot press RightShift, so this is the way back
+        -- into the panel once it is closed.
+        local iconDrag = nil
+        local icon = make("TextButton", {
+                Name = "SpideyToggleIcon",
+                Size = UDim2.fromOffset(54, 54),
+                Position = UDim2.new(1, -74, 0.3, 0),
+                BackgroundColor3 = THEME.Accent,
+                Text = "S",
+                TextColor3 = Color3.fromRGB(255, 255, 255),
+                Font = Enum.Font.GothamBlack,
+                TextSize = 26,
+                BorderSizePixel = 0,
+                AutoButtonColor = false,
+                Active = true,
+                Visible = false,
+        }, GUI)
+        addCorner(icon, 27)
+        local iconStroke = Instance.new("UIStroke")
+        iconStroke.Color = Color3.fromRGB(255, 255, 255)
+        iconStroke.Transparency = 0.35
+        iconStroke.Thickness = 2
+        iconStroke.Parent = icon
+        panelIcon = icon
+
+        icon.InputBegan:Connect(function(input)
+                local t = input.UserInputType
+                if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
+                        iconDrag = { StartInput = input.Position, StartPos = icon.Position, Moved = false }
+                end
+        end)
+        icon.InputEnded:Connect(function(input)
+                local t = input.UserInputType
+                if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
+                        if iconDrag and not iconDrag.Moved then
+                                togglePanel()
+                        end
+                        iconDrag = nil
+                end
+        end)
+
         track(UserInputService.InputChanged:Connect(function(input)
                 local t = input.UserInputType
                 if dragging and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
@@ -1956,6 +2022,15 @@ local function buildUI()
                                 mobileDrag.StartPos.X.Scale, mobileDrag.StartPos.X.Offset + delta.X,
                                 mobileDrag.StartPos.Y.Scale, mobileDrag.StartPos.Y.Offset + delta.Y
                         )
+                elseif iconDrag and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
+                        local delta = input.Position - iconDrag.StartInput
+                        if delta.Magnitude > 6 then
+                                iconDrag.Moved = true
+                        end
+                        icon.Position = UDim2.new(
+                                iconDrag.StartPos.X.Scale, iconDrag.StartPos.X.Offset + delta.X,
+                                iconDrag.StartPos.Y.Scale, iconDrag.StartPos.Y.Offset + delta.Y
+                        )
                 end
         end))
 
@@ -1965,10 +2040,13 @@ end
 --======================================================================
 -- PANEL TOGGLE + KEY CAPTURE
 --======================================================================
-local function togglePanel()
+function togglePanel()
         panelVisible = not panelVisible
-        if GUI then
-                GUI.Enabled = panelVisible
+        if uiMain and uiMain.Parent then
+                uiMain.Visible = panelVisible
+        end
+        if panelIcon and panelIcon.Parent then
+                panelIcon.Visible = not panelVisible
         end
 end
 
@@ -2370,4 +2448,4 @@ if LocalPlayer.Character then
         task.spawn(onCharacterAdded, LocalPlayer.Character)
 end
 
-print("[SPIDEY ENGINE v3.2] Loaded successfully — press RightShift to open the control panel.")
+print("[SPIDEY ENGINE v3.3] Loaded successfully — press RightShift or the X button to open/close the panel.")
