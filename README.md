@@ -1,4 +1,4 @@
-# SPIDER-MAN MOVEMENT ENGINE v3.3 — Roblox (Single-File LocalScript)
+# SPIDER-MAN MOVEMENT ENGINE v3.4 — Roblox (Single-File LocalScript)
 
 A complete, self-contained, **client-side** Spider-Man movement engine for Roblox.
 One script. Zero server dependencies. Zero RemoteEvents. **Zero external assets** — webs are plain white local Beams, so visuals render instantly on every executor. All animations are procedural (no Animation IDs).
@@ -12,9 +12,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 ```
 
 > **Executor caching the old file?** Append a version tag to bust the cache:
-> `loadstring(game:HttpGet("...spiderman.lua?v=3.3"))()`
+> `loadstring(game:HttpGet("...spiderman.lua?v=3.4"))()`
 
-- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.3]`**.
+- Verify you are on the current build: the console must print **`[SPIDEY ENGINE v3.4]`**.
 - Press **RightShift** in-game to open / hide the control panel.
 - Re-executing the script automatically destroys the previous instance (no duplicates).
 - Everything cleans itself up on death / respawn (Maid garbage-collection pattern).
@@ -23,7 +23,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 
 | File | Description |
 |------|-------------|
-| `spiderman.lua` | The full movement engine — one production-ready LocalScript (~2,200 lines) |
+| `spiderman.lua` | The full movement engine — one production-ready LocalScript (~2,450 lines) |
 | `README.md` | This documentation |
 
 ## Controls (Insomniac's Spider-Man inspired)
@@ -54,7 +54,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/TheStrongestOfTomorro
 
 ## Mechanics Highlights
 
-- **Web Swing (true RopeConstraint physics)** — a 5-ray smart search (straight, +18°, +35°, two side rays) hunts for a **real surface** within 350 studs; the web attaches only to an actual part and **never hangs in empty air** — if nothing valid is hit, no web fires. A `RopeConstraint` between the anchor and your root is the pendulum (the physics engine enforces the arc — no CFrame teleporting). On attach you get an instant **launch impulse** (crosshair look * 62, +18 up when grounded), a continuous **forward drive** of 40 studs/s² while holding E (capped at 125), `W` **reels the rope in** for the classic energy pump, and releasing mid-air flings you with an upward pop. 18° procedural body roll; humanoid is held in Freefall so ground friction never fights the rope.
+- **Web Swing (true RopeConstraint physics)** — a 5-ray smart search (straight, +18°, +35°, two side rays) hunts for a **real surface** within 350 studs; the web attaches only to an actual part and **never hangs in empty air** — if nothing valid is hit, no web fires. A `RopeConstraint` (Restitution 0 = inelastic) between the anchor and your root is the pendulum — the physics engine natively enforces the radius arc, with **no manual CFrame clamping** to fight it. On attach you get an instant **launch impulse** (crosshair look * 62, +18 up when grounded), a continuous **camera-facing forward drive** (40 studs/s² along the flat XZ look direction, capped at 125) while holding E, `W` **dynamically reels the rope in** (9 studs/s, classic energy pump), and releasing E — or tapping **Space** (Insomniac X) — **slingshots you out of the arc**: upward pop to 14 with forward horizontal momentum preserved and multiplied ×1.15. 18° procedural body roll; the humanoid is held strictly in Freefall (no PlatformStand, so procedural poses never go limp) and the swing Maid is fully cleaned up on every detach.
 - **Point Launch** — `F` renders a web and pulls at 180 studs/s; arrival within 4.5 studs opens a **3-second window**: `Space` = `Look * 130 + Up * 45` boost; after 3 s the stored momentum resets and `Space` performs a default jump.
 - **Tight Gap Zip** — two parallel shoulder rays (3.5 studs apart) detect opposing surfaces < 8 studs apart, then lerp you through the gap in 0.12 s with collision bypass and a `Look * (speed + 25)` exit boost.
 - **Dual-Web Slingshot** — Phase 1 anchors left web to LeftHand, Phase 2 anchors right web to RightHand. Walking backward builds tension `T = clamp((dist - initial) / maxStretch, 0, 1)`: WalkSpeed `16 * (1 - T^1.5)`, FOV ramps 70 to 110, webs heat White > Light Yellow > Deep Red. Release at `T >= 0.50` (tap R) or automatically at `T = 1.0` for `Dir * T * 240` launch at 35° elevation.
