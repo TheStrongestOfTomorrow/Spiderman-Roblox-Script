@@ -1,5 +1,5 @@
 --[[=====================================================================
-        SPIDER-MAN MOVEMENT ENGINE v3.3  •  Single-File Client LocalScript
+        SPIDER-MAN MOVEMENT ENGINE v3.4  •  Single-File Client LocalScript
         =====================================================================
         CONTROLS (Insomniac's Spider-Man inspired)
           • E (hold)         Web Swing — fires ONLY at a real surface (5-ray
@@ -73,6 +73,7 @@ local CONFIG = {
         SwingMaxSpeed      = 125,   -- horizontal speed cap for the drive
         SwingWReel         = 9,     -- W reels the rope in (studs/sec)
         SwingReleasePop    = 14,    -- upward pop when releasing mid-air
+        SwingReleaseBoost  = 1.15, -- horizontal momentum multiplier on release (slingshot)
 
         -- [B] Point Launch
         LaunchSpeed        = 180,   -- linear pull speed toward target
@@ -660,26 +661,29 @@ function Swing.Step(dt)
         local vel = RootPart.AssemblyLinearVelocity
         local horiz = Vector3.new(vel.X, 0, vel.Z)
 
-        -- continuous forward drive while holding E (pumps the pendulum arc)
+        -- continuous forward drive while holding E (pumps the pendulum arc):
+        -- thrust along the camera's flat XZ look direction, capped at max speed
         if horiz.Magnitude < CONFIG.SwingMaxSpeed then
                 local look = Camera.CFrame.LookVector
                 local flatLook = Vector3.new(look.X, 0, look.Z)
                 flatLook = (flatLook.Magnitude > 0.05) and flatLook.Unit or Vector3.new(0, 0, -1)
-                local thrustDir = (horiz.Magnitude > 2) and horiz.Unit or flatLook
-                vel = vel + thrustDir * CONFIG.SwingThrust * dt
+                vel = vel + flatLook * CONFIG.SwingThrust * dt
         end
 
-        -- WASD steering; holding W reels the rope in (classic energy pump)
+        -- WASD air steering on the arc
         local steer = getCameraSteer()
         if steer.Magnitude > 0.01 then
                 vel = vel + steer * CONFIG.SwingSteerAccel * dt
-                if moveKeys.W and Swing.Rope.Length > 14 then
-                        Swing.Rope.Length = math.max(Swing.Rope.Length - CONFIG.SwingWReel * dt, 14)
-                        Swing.RopeLength = Swing.Rope.Length
-                end
         else
                 -- gentle coast decay when the stick is neutral
                 vel = Vector3.new(vel.X * CONFIG.SwingDragXZ, vel.Y, vel.Z * CONFIG.SwingDragXZ)
+        end
+
+        -- W REEL-IN: dynamically shorten the RopeConstraint while held —
+        -- pulls the arc tighter and converts height into swing speed
+        if moveKeys.W and Swing.Rope.Length > 14 then
+                Swing.Rope.Length = math.max(Swing.Rope.Length - CONFIG.SwingWReel * dt, 14)
+                Swing.RopeLength = Swing.Rope.Length
         end
         RootPart.AssemblyLinearVelocity = vel
 
@@ -725,14 +729,16 @@ function Swing.End(keepMomentum)
         Swing.Beam = nil
         Swing.PrevDir = nil
         releaseWebs()
-        -- release fling: a small upward pop when you let go mid-air
+        -- SLINGSHOT FLING: the swing Maid was already cleaned up via
+        -- releaseWebs(); pop upward and preserve + multiply the forward
+        -- horizontal momentum so you slingshot seamlessly out of the arc
         if keepMomentum ~= false and RootPart and RootPart.Parent
                 and Humanoid and Humanoid.Parent
                 and Humanoid.FloorMaterial == Enum.Material.Air then
                 local v = RootPart.AssemblyLinearVelocity
-                if v.Y < CONFIG.SwingReleasePop then
-                        RootPart.AssemblyLinearVelocity = Vector3.new(v.X, CONFIG.SwingReleasePop, v.Z)
-                end
+                local flat = Vector3.new(v.X, 0, v.Z) * CONFIG.SwingReleaseBoost
+                local up = math.max(v.Y, CONFIG.SwingReleasePop)
+                RootPart.AssemblyLinearVelocity = Vector3.new(flat.X, up, flat.Z)
         end
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
@@ -1882,7 +1888,7 @@ local function buildUI()
                 Size = UDim2.new(1, -90, 1, 0),
                 Position = UDim2.new(0, 24, 0, 0),
                 BackgroundTransparency = 1,
-                Text = "SPIDER-MAN MOVEMENT ENGINE v3.3",
+                Text = "SPIDER-MAN MOVEMENT ENGINE v3.4",
                 TextColor3 = THEME.Text,
                 Font = Enum.Font.GothamBold,
                 TextSize = 13,
@@ -2448,4 +2454,4 @@ if LocalPlayer.Character then
         task.spawn(onCharacterAdded, LocalPlayer.Character)
 end
 
-print("[SPIDEY ENGINE v3.3] Loaded successfully — press RightShift or the X button to open/close the panel.")
+print("[SPIDEY ENGINE v3.4] Loaded successfully — press RightShift or the X button to open/close the panel.")
