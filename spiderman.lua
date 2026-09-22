@@ -1,38 +1,45 @@
 --[[=====================================================================
-        SPIDER-MAN MOVEMENT ENGINE v3.4  •  Single-File Client LocalScript
+        SPIDER-MAN MOVEMENT ENGINE v3.5  •  The Definitive Client LocalScript
         =====================================================================
         CONTROLS (Insomniac's Spider-Man inspired)
-          • E (hold)         Web Swing — fires ONLY at a real surface (5-ray
-                             smart anchor search), true RopeConstraint
-                             pendulum; W reels in, release to fling forward
-          • F (tap)          Point Launch — Space within 3s of arrival = boost
-          • Space            Tight Gap Zip (face a narrow gap) / wall jump-off
-          • R (x2 + S)       Dual-Web Ground Slingshot
-          • LeftShift (hold) Sprint on the ground AND on walls (R2 parkour)
+          • E (hold)         Web Swing — fires at real surfaces (8-ray smart
+                             anchor search + line-of-sight check), true Rope-
+                             Constraint pendulum; W reels in, S lowers arc,
+                             alternating left/right hands, procedural arm aim.
+          • F (tap)          Point Launch — dual-web pull to crosshair point;
+                             perches stably on arrival; Space boosts forward!
+                             (Tap Space mid-flight for mid-air zip boost).
+          • Space            Multi-Context:
+                             - Wall Jump-Off (while on wall)
+                             - Swing Release Jump (slingshot fling mid-air)
+                             - Point Launch Boost (perched or mid-flight)
+                             - Tight Gap Zip (facing narrow passage/crevice)
+                             - Quick Air Web Zip (freefall traversal burst)
+          • R (tap / hold)   Dual-Web Slingshot — smart dual anchor lock;
+                             walk back with S to stretch, release to launch!
+          • LeftShift (hold) Sprint on ground (27 studs/s) & walls (40 studs/s)
+                             + manual Ground Slide while sprinting!
           • Wall Climb       PASSIVE — run or jump at any wall to stick and
-                             climb; Space jumps off; toggle in the UI panel
+                             climb; Space jumps off; automatic Rooftop Ledge Vault!
           • G (hold) + WASD  Air Tricks (frontflip / backflip / barrel roll)
-          • LeftShift        Ground Slide on fast landings (> 45 speed)
-          • RightShift / X   Toggle the control panel — a movable floating
-                             icon re-opens it (mobile-friendly)
+          • LeftShift / C    Ground Slide on fast landings (> 40 speed) or sprint
+          • RightShift / X   Toggle control panel — movable floating 'S' icon
+                             re-opens panel (mobile-friendly).
 
-        FEATURES
-          • Web Swing with 5-ray real-surface anchor search, engine
-            RopeConstraint pendulum, forward drive + reel-in, 18° roll
-          • Point Launch, Tight Gap Zip, Dual-Web Slingshot, Ground Slide
-          • Passive wall crawl / wall sprint / wall jump-off
-          • Procedural Air Tricks — Motor6D tuck poses, zero Animation IDs
-          • Full UI panel: per-move toggles, re-binds, resets, mobile canvas
-          • Maid-pattern garbage collection on every state change / death
-
-        TECHNICAL NOTES
-          • 100% client-side. No RemoteEvents, no server instancing.
-          • Webs are plain white local Beams — NO external texture or mesh
-            assets, so visuals render instantly on every executor.
-          • Movement is applied to LocalPlayer.Character.HumanoidRootPart via
-            AssemblyLinearVelocity / CFrame writes (client owns its physics).
-          • Zero Animation IDs. All poses are procedural (Motor6D C0 offsets).
-          • Re-running this script auto-destroys the previous instance.
+        NEW IN v3.5:
+          • Smart Multi-Tier Swing Anchor Search (8 rays, street lobes, LOS check)
+          • Zero Missed Swings: Graceful fallback to real geometry if no edge
+          • Alternating Web Hands & Procedural Arm Aiming (R15 & R6)
+          • Rooftop Ledge Vault: Climb over roof lips instead of falling
+          • Corrected Wall Crawl Posture: Chest flat to wall, crawl in movement dir
+          • Point Launch Stable Perch + Mid-Flight Zip Boost
+          • Tight Gap Zip Geometry Overhaul + Dual Web Strands + Safe Collision
+          • Dual-Web Slingshot Instant Dual-Lock, Timeout Safety & Freefall Launch
+          • Ground Slide Procedural Superhero Pose + Sprint-Slide Trigger
+          • Quick Air Web Zip on Space (seamless traversal)
+          • Framerate-Independent Physics & Air Tricks (30-240+ FPS)
+          • Ergonomic Mobile Button Grid (no overflow) & Multi-Touch Fix
+          • Built-In Zero-Asset Audio Cues (rbxasset:// core sounds)
 =====================================================================--]]
 
 local Players          = game:GetService("Players")
@@ -61,63 +68,73 @@ end
 --======================================================================
 local CONFIG = {
         -- [A] Web Swing (true RopeConstraint pendulum)
-        SwingMaxDistance   = 350,   -- anchor raycast max distance (studs)
-        SwingMinHeightDiff = 5,     -- anchor must be this far above the root
-        SwingSteerAccel    = 42,    -- WASD pump acceleration while swinging
-        SwingDragXZ        = 0.995, -- per-frame horizontal drag (no WASD held)
+        SwingMaxDistance   = 360,   -- anchor raycast max distance (studs)
+        SwingMinHeightDiff = 4,     -- anchor must be this far above the root
+        SwingSteerAccel    = 46,    -- WASD pump acceleration while swinging
+        SwingDragXZ        = 0.995, -- horizontal drag base (scaled with dt*60)
         SwingRollMaxDeg    = 18,    -- procedural body roll clamp (degrees)
-        SwingRollFactor    = 0.2,   -- roll gain (per spec factor)
-        SwingLaunchSpeed   = 62,    -- initial impulse toward the crosshair
+        SwingRollFactor    = 0.20,  -- roll gain factor
+        SwingLaunchSpeed   = 65,    -- initial impulse toward the crosshair
         SwingLiftOff       = 18,    -- extra upward pop when starting grounded
-        SwingThrust        = 40,    -- continuous forward drive while holding E
-        SwingMaxSpeed      = 125,   -- horizontal speed cap for the drive
-        SwingWReel         = 9,     -- W reels the rope in (studs/sec)
-        SwingReleasePop    = 14,    -- upward pop when releasing mid-air
-        SwingReleaseBoost  = 1.15, -- horizontal momentum multiplier on release (slingshot)
+        SwingThrust        = 44,    -- continuous forward drive while holding E
+        SwingMaxSpeed      = 135,   -- horizontal speed cap for the drive
+        SwingWReel         = 10,    -- W reels the rope in (studs/sec)
+        SwingSExtend       = 8,     -- S extends the rope for deeper drops (studs/sec)
+        SwingReleasePop    = 15,    -- upward pop when releasing mid-air
+        SwingReleaseBoost  = 1.18,  -- horizontal momentum multiplier on release (slingshot)
 
         -- [B] Point Launch
-        LaunchSpeed        = 180,   -- linear pull speed toward target
-        LaunchArriveRadius = 4.5,   -- arrival threshold (studs)
+        LaunchSpeed        = 185,   -- linear pull speed toward target
+        LaunchArriveRadius = 5.0,   -- arrival threshold (studs)
         LaunchWindow       = 3.0,   -- Space boost window after arrival (sec)
-        LaunchTimeout      = 4.0,   -- hard timeout for the pull (sec)
-        BoostLookSpeed     = 130,   -- boost speed along camera look
+        LaunchTimeout      = 3.5,   -- hard timeout for the pull (sec)
+        BoostLookSpeed     = 135,   -- boost speed along camera look
         BoostUpSpeed       = 45,    -- boost upward component
 
         -- [C] Tight Gap Zip
         GapShoulderSpacing = 3.5,   -- distance between the two parallel rays
-        GapMaxClearance    = 8,     -- max gap width to allow pass-through
+        GapMaxClearance    = 10,    -- max gap width to allow pass-through
         GapZipDuration     = 0.12,  -- lerp time across the gap (sec)
-        GapExitBoost       = 25,    -- exit velocity boost on top of entry speed
+        GapExitBoost       = 28,    -- exit velocity boost on top of entry speed
 
         -- [D] Dual-Web Slingshot
-        SlingMaxStretch    = 18,    -- studs of stretch from initial distance
-        SlingMaxSpeed      = 240,   -- launch speed at T = 1.0
-        SlingMinT          = 0.50,  -- minimum tension for manual release
+        SlingMaxStretch    = 20,    -- studs of stretch from initial distance
+        SlingMaxSpeed      = 250,   -- launch speed at T = 1.0
+        SlingMinT          = 0.45,  -- minimum tension for manual release
         SlingLaunchAngle   = 35,    -- upward launch angle (degrees)
+        SlingTimeout       = 8.0,   -- max charging duration before auto-cancel
 
         -- [E] Wall systems (passive climb, Insomniac parkour style)
-        CrawlSpeed         = 14,    -- wall crawl speed (studs/sec)
-        SprintSpeed        = 38,    -- wall sprint speed (studs/sec)
-        WallStickOffset    = 3,     -- hover distance from wall surface
-        WallDetectDist     = 7,     -- forward wall detection range
-        PassiveWallDist    = 4.5,   -- auto-attach when a wall is this close
-        ReattachCooldown   = 0.6,   -- seconds before re-attach after jump-off
+        CrawlSpeed         = 15,    -- wall crawl speed (studs/sec)
+        SprintSpeed        = 40,    -- wall sprint speed (studs/sec)
+        WallStickOffset    = 3.0,   -- hover distance from wall surface
+        WallDetectDist     = 7.5,   -- forward wall detection range
+        PassiveWallDist    = 4.8,   -- auto-attach when a wall is this close
+        ReattachCooldown   = 0.5,   -- seconds before re-attach after jump-off
         WallJumpUp         = 55,    -- Space jump-off vertical impulse
         WallJumpOut        = 25,    -- Space jump-off push away from wall
-        WallJumpLook       = 15,    -- Space jump-off camera-look impulse
-        RunSpeed           = 26,    -- ground sprint speed (LeftShift hold)
+        WallJumpLook       = 18,    -- Space jump-off camera-look impulse
+        LedgeVaultUp       = 24,    -- rooftop ledge vault vertical impulse
+        LedgeVaultForward  = 16,    -- rooftop ledge vault forward push
+        RunSpeed           = 27,    -- ground sprint speed (LeftShift hold)
 
         -- [F] Air Tricks
-        TrickFlipRate      = 12,    -- front/backflip degrees per frame
-        TrickRollRate      = 15,    -- barrel roll degrees per frame
-        TrickMinAltitude   = 15,    -- auto-recover below this altitude
+        TrickFlipRate      = 14,    -- front/backflip rate (deg/frame @ 60fps)
+        TrickRollRate      = 16,    -- barrel roll rate (deg/frame @ 60fps)
+        TrickMinAltitude   = 14,    -- auto-recover below this altitude
         TrickRecoveryTime  = 0.15,  -- upright recovery duration (sec)
 
         -- [G] Ground Slide
-        SlideMinSpeed      = 45,    -- required landing speed to start slide
+        SlideMinSpeed      = 40,    -- required landing speed to auto slide
+        SlideSprintMin     = 18,    -- speed to trigger manual slide while sprinting
         SlideEndSpeed      = 10,    -- slide ends below this speed
-        SlideDecel         = 10,    -- slide deceleration (studs/sec^2)
+        SlideDecel         = 12,    -- slide deceleration (studs/sec^2)
         SlideDropOffset    = -1.5,  -- root height offset while sliding
+
+        -- [H] Quick Air Zip
+        AirZipSpeed        = 75,    -- instant forward burst on air zip
+        AirZipPop          = 12,    -- slight upward lift
+        AirZipCooldown     = 0.75,  -- cooldown between air zips (sec)
 
         -- Fail-safes / camera
         AntiStuckSpeed     = 1.5,   -- speed below which stuck-timer runs
@@ -128,9 +145,28 @@ local CONFIG = {
         FOVMax             = 110,
         FOVLerp            = 0.1,
 
-        -- Web visuals: plain local white beam, zero external assets
-        WebColor     = Color3.fromRGB(240, 240, 255),
+        -- Web visuals & Audio
+        WebColor           = Color3.fromRGB(240, 240, 255),
+        AudioEnabled       = true,  -- built-in client engine sounds
 }
+
+--======================================================================
+-- AUDIO HELPER (100% zero external assets, uses built-in engine sounds)
+--======================================================================
+local function playSound(soundId, volume, pitch)
+        if not CONFIG.AudioEnabled then return end
+        pcall(function()
+                local sound = Instance.new("Sound")
+                sound.SoundId = soundId
+                sound.Volume = volume or 0.5
+                sound.PlaybackSpeed = pitch or 1
+                sound.Parent = Workspace
+                sound:Play()
+                task.delay(1.5, function()
+                        pcall(function() sound:Destroy() end)
+                end)
+        end)
+end
 
 --======================================================================
 -- MAID (garbage-collection engine)
@@ -169,8 +205,6 @@ local lifeMaid = Maid.new() -- per-life connections (died, zip tween, etc.)
 
 --======================================================================
 -- STATE MANAGER
---      Idle | Swinging | PointLaunching | GapZipping | SlingshotCharging
---      WallCrawling | WallSprinting | WallEjecting | AirTricking | GroundSliding
 --======================================================================
 local StateManager = {
         States = {
@@ -188,14 +222,12 @@ local StateManager = {
         Current = "Idle",
 }
 
--- Allowed transition graph (Section 2 rules; unspecified edges are
--- resolved permissively because user-triggered moves pass force = true)
 local VALID_TRANSITIONS = {
         Idle              = { "Swinging", "PointLaunching", "GapZipping", "SlingshotCharging", "WallCrawling", "WallSprinting", "WallEjecting", "AirTricking", "GroundSliding" },
         Swinging          = { "PointLaunching", "GapZipping", "WallCrawling", "AirTricking", "Idle", "WallEjecting" },
         PointLaunching    = { "Idle", "Swinging", "GapZipping", "AirTricking", "WallCrawling", "GroundSliding" },
         GapZipping        = { "Idle", "Swinging", "AirTricking", "GroundSliding" },
-        SlingshotCharging = { "Idle" }, -- ground locked until launch / cancel
+        SlingshotCharging = { "Idle" },
         WallCrawling      = { "WallSprinting", "WallEjecting", "Swinging", "Idle" },
         WallSprinting     = { "WallCrawling", "WallEjecting", "Swinging", "Idle" },
         WallEjecting      = { "Idle", "Swinging", "AirTricking", "WallCrawling" },
@@ -226,14 +258,15 @@ end
 -- MOVE REGISTRY (UI rows + input routing)
 --======================================================================
 local Moves = {
-        [1] = { Name = "Pendulum Swing",      Default = Enum.KeyCode.E,         Key = Enum.KeyCode.E,         Enabled = true },
-        [2] = { Name = "Point Launch",        Default = Enum.KeyCode.F,         Key = Enum.KeyCode.F,         Enabled = true },
-        [3] = { Name = "Tight Gap Zip",       Default = Enum.KeyCode.Space,     Key = Enum.KeyCode.Space,     Enabled = true },
-        [4] = { Name = "Dual-Web Slingshot",  Default = Enum.KeyCode.R,         Key = Enum.KeyCode.R,         Enabled = true },
-        [5] = { Name = "Sprint (Ground/Wall)", Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
-        [6] = { Name = "Wall Climb (Passive)", Default = nil,                    Key = nil,                    Enabled = true },
-        [7] = { Name = "Air Tricks",          Default = Enum.KeyCode.G,         Key = Enum.KeyCode.G,         Enabled = true },
-        [8] = { Name = "Ground Slide",        Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
+        [1] = { Name = "Pendulum Swing",       Default = Enum.KeyCode.E,         Key = Enum.KeyCode.E,         Enabled = true },
+        [2] = { Name = "Point Launch",         Default = Enum.KeyCode.F,         Key = Enum.KeyCode.F,         Enabled = true },
+        [3] = { Name = "Tight Gap Zip",        Default = Enum.KeyCode.Space,     Key = Enum.KeyCode.Space,     Enabled = true },
+        [4] = { Name = "Dual-Web Slingshot",   Default = Enum.KeyCode.R,         Key = Enum.KeyCode.R,         Enabled = true },
+        [5] = { Name = "Sprint (Ground/Wall)",  Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
+        [6] = { Name = "Wall Climb (Passive)",  Default = nil,                    Key = nil,                    Enabled = true },
+        [7] = { Name = "Air Tricks",           Default = Enum.KeyCode.G,         Key = Enum.KeyCode.G,         Enabled = true },
+        [8] = { Name = "Ground Slide",         Default = Enum.KeyCode.LeftShift, Key = Enum.KeyCode.LeftShift, Enabled = true },
+        [9] = { Name = "Quick Air Zip",        Default = Enum.KeyCode.Space,     Key = Enum.KeyCode.Space,     Enabled = true },
 }
 
 --======================================================================
@@ -315,11 +348,10 @@ local function refreshRig()
                 end
         end
 
-        if Humanoid then
+        if Humanoid and not sprintActive then
                 Rig.DefaultWalkSpeed = Humanoid.WalkSpeed
         end
 
-        -- keep the local character + camera + fx folder out of our raycasts
         local ignore = { FXFolder }
         if Character then table.insert(ignore, Character) end
         if Camera then table.insert(ignore, Camera) end
@@ -398,13 +430,25 @@ local function handAttachment(hand)
 end
 
 local function anchorAttachment(part, worldPos)
-        if not part then
-                return nil
-        end
         local att = Instance.new("Attachment")
         att.Name = "SpideyWebAnchor"
-        att.Parent = part
-        att.WorldPosition = worldPos
+        if part and part:IsA("BasePart") and part.Anchored then
+                att.Parent = part
+                att.WorldPosition = worldPos
+        else
+                -- Virtual proxy anchor: if part is unanchored or Terrain, swing remains stable
+                local proxy = Instance.new("Part")
+                proxy.Name = "SpideyVirtualAnchor"
+                proxy.Size = Vector3.new(0.1, 0.1, 0.1)
+                proxy.CFrame = CFrame.new(worldPos)
+                proxy.Anchored = true
+                proxy.CanCollide = false
+                proxy.Transparency = 1
+                proxy.Parent = FXFolder
+                att.Parent = proxy
+                att.Position = Vector3.new(0, 0, 0)
+                webMaid:Give(proxy)
+        end
         return att
 end
 
@@ -412,11 +456,10 @@ local function createWebBeam(attachment0, attachment1)
         local beam = Instance.new("Beam")
         beam.Attachment0 = attachment0
         beam.Attachment1 = attachment1
-        -- plain white strand: no Texture asset so it renders on every executor
-        beam.Width0 = 0.25
+        beam.Width0 = 0.22
         beam.Width1 = 0.08
         beam.Color = ColorSequence.new(CONFIG.WebColor)
-        beam.LightEmission = 0.2
+        beam.LightEmission = 0.35
         beam.LightInfluence = 0
         beam.FaceCamera = true
         beam.Segments = 12
@@ -424,18 +467,12 @@ local function createWebBeam(attachment0, attachment1)
         return beam
 end
 
--- Destroys every active web visual (beams, attachments, virtual anchors)
 local function releaseWebs()
         webMaid:Cleanup()
 end
 
 --======================================================================
--- GEOMETRY SHARPNESS FILTER (swing anchor validation)
---      Samples 4 auxiliary normals around the primary hit point. Decision
---      tiers per adjacent dot product:
---        dot <= 0.85  -> sharp edge / roof lip          -> ACCEPT
---        dot >= 0.999 -> identical planar face (flat)   -> ACCEPT
---        in between   -> smooth gradient (dome/sphere)  -> REJECT
+-- GEOMETRY SHARPNESS & SWING ANCHOR SYSTEM
 --======================================================================
 local function isSharpEnough(hitPos, hitNormal)
         local up = Vector3.new(0, 1, 0)
@@ -451,7 +488,7 @@ local function isSharpEnough(hitPos, hitNormal)
         local radials = { t1, t2, t1 * -1, t2 * -1 }
 
         local normals = { hitNormal }
-        local origin = hitPos + hitNormal * 1.0
+        local origin = hitPos + hitNormal * 0.8
         for _, radial in ipairs(radials) do
                 local target = hitPos + radial * 2.0
                 local dir = (target - origin)
@@ -464,7 +501,7 @@ local function isSharpEnough(hitPos, hitNormal)
         end
 
         if #normals < 2 then
-                return true -- isolated surface, nothing to compare against
+                return true
         end
 
         local sawSharp = false
@@ -475,33 +512,22 @@ local function isSharpEnough(hitPos, hitNormal)
                 local b = normals[(i % #normals) + 1]
                 local d = a:Dot(b)
                 pairsChecked = pairsChecked + 1
-                if d <= 0.85 then
+                if d <= 0.88 then
                         sawSharp = true
                 end
-                if d < 0.999 then
+                if d < 0.95 then
                         allFlat = false
                 end
         end
 
-        if sawSharp then
+        if sawSharp or allFlat then
                 return true
         end
-        if allFlat and pairsChecked >= 3 then
-                return true -- one continuous planar face (flat roof / wall)
-        end
-        if pairsChecked >= 3 then
-                return false -- smooth curved gradient (dome / sphere / pillar)
-        end
-        return true
+        return pairsChecked < 3
 end
 
--- Forward declarations: these systems are defined below this point, but
--- earlier systems (e.g. Swing.Begin -> PointLaunch.Cancel) reference them
--- at runtime (never at parse time). Lua closes over the local declared
--- here, and the definitions further down ASSIGN to these same locals —
--- they must NOT redeclare with 'local', otherwise the early functions
--- would still see nil.
-local Wall, PointLaunch, GapZip
+-- Forward declarations
+local Wall, PointLaunch, GapZip, AirZip
 
 --======================================================================
 -- UPRIGHT RECOVERY SYSTEM (shared by Wall Eject + Air Tricks)
@@ -520,17 +546,15 @@ local function startUprightRecovery(duration, after)
 end
 
 --======================================================================
--- [A] WEB SWING  (Hold E) — true RopeConstraint pendulum physics.
---      The web attaches ONLY to a real surface found by a 5-ray smart
---      search; there is NO fake sky anchor, so webs never hang in air.
+-- [A] WEB SWING  (Hold E) — Insomniac-Grade RopeConstraint Pendulum
 --======================================================================
 local Swing = {
         Active = false, AnchorPart = nil, AnchorPos = nil, RopeLength = 0,
         Attach0 = nil, RootAttach = nil, Rope = nil,
         HandAttach = nil, Beam = nil, PrevDir = nil, StartClock = 0,
+        IsLeft = false,
 }
 
--- tilt a camera direction upward by deg degrees
 local function tiltUp(dir, deg)
         local a = math.rad(deg)
         local d = dir * math.cos(a) + Vector3.new(0, math.sin(a), 0)
@@ -540,32 +564,64 @@ local function tiltUp(dir, deg)
         return d.Unit
 end
 
--- 5-ray anchor search: straight, up +18°, up +35°, and two side rays.
--- Every candidate must hit a REAL part above the root and pass the
--- sharpness filter — otherwise the web does not fire at all.
 local function findSwingAnchor(rootPos)
         local look  = Camera.CFrame.LookVector
         local right = Camera.CFrame.RightVector
+
+        -- Multi-tier ray architecture: high center, street facades, wide skyscrapers, apex
         local rays = {
+                tiltUp(look, 20),
+                tiltUp(look, 38),
+                tiltUp((look - right * 0.50).Unit, 24),
+                tiltUp((look + right * 0.50).Unit, 24),
+                tiltUp((look - right * 0.85).Unit, 32),
+                tiltUp((look + right * 0.85).Unit, 32),
+                tiltUp(look, 55),
                 look,
-                tiltUp(look, 18),
-                tiltUp(look, 35),
-                tiltUp((look + right * 0.30).Unit, 12),
-                tiltUp((look - right * 0.30).Unit, 12),
         }
+
+        local bestIdealHit = nil
+        local bestIdealScore = -math.huge
+        local bestFallbackHit = nil
+        local bestFallbackScore = -math.huge
+
+        local origin = Camera.CFrame.Position
+        local rootEye = rootPos + Vector3.new(0, 2, 0)
+
         for _, dir in ipairs(rays) do
-                local hit = Workspace:Raycast(
-                        Camera.CFrame.Position,
-                        dir * CONFIG.SwingMaxDistance,
-                        RayParams
-                )
-                if hit
-                        and hit.Position.Y > rootPos.Y + CONFIG.SwingMinHeightDiff
-                        and isSharpEnough(hit.Position, hit.Normal) then
-                        return hit
+                local hit = Workspace:Raycast(origin, dir * CONFIG.SwingMaxDistance, RayParams)
+                if hit and hit.Position.Y > rootPos.Y + CONFIG.SwingMinHeightDiff then
+                        local toAnchor = hit.Position - rootEye
+                        local dist = toAnchor.Magnitude
+                        local occluded = false
+                        if dist > 2 then
+                                local los = Workspace:Raycast(rootEye, toAnchor.Unit * (dist - 1.2), RayParams)
+                                if los and los.Instance ~= hit.Instance then
+                                        occluded = true
+                                end
+                        end
+
+                        if not occluded then
+                                local heightBonus = (hit.Position.Y - rootPos.Y) * 1.5
+                                local forwardBonus = look:Dot((hit.Position - rootPos).Unit) * 25
+                                local score = heightBonus + forwardBonus - dist * 0.1
+
+                                if isSharpEnough(hit.Position, hit.Normal) then
+                                        if score > bestIdealScore then
+                                                bestIdealScore = score
+                                                bestIdealHit = hit
+                                        end
+                                else
+                                        if score > bestFallbackScore then
+                                                bestFallbackScore = score
+                                                bestFallbackHit = hit
+                                        end
+                                end
+                        end
                 end
         end
-        return nil
+
+        return bestIdealHit or bestFallbackHit
 end
 
 function Swing.Begin()
@@ -578,9 +634,6 @@ function Swing.Begin()
         end
 
         local rootPos = RootPart.Position
-
-        -- REAL SURFACE ONLY: 5-ray smart anchor search. No fake sky webs —
-        -- if nothing real is hit, the web simply does not fire.
         local hit = findSwingAnchor(rootPos)
         if not hit then
                 return
@@ -595,17 +648,19 @@ function Swing.Begin()
         Swing.PrevDir = nil
         Swing.AnchorPart = anchorPart
         Swing.AnchorPos = anchorPos
-        local dist = math.max((anchorPos - rootPos).Magnitude, 6)
-        Swing.RopeLength = dist * 0.96 -- slight pre-tension: catches you instantly
+
+        local toAnchor = anchorPos - rootPos
+        local isLeft = Camera.CFrame.RightVector:Dot(toAnchor) < -0.1
+        Swing.IsLeft = isLeft
+
+        local dist = math.max(toAnchor.Magnitude, 6)
+        Swing.RopeLength = dist * 0.96
 
         Swing.Attach0 = anchorAttachment(anchorPart, anchorPos)
         Swing.RootAttach = Instance.new("Attachment")
         Swing.RootAttach.Name = "SpideySwingRoot"
         Swing.RootAttach.Parent = RootPart
 
-        -- TRUE PHYSICS PENDULUM: engine-side RopeConstraint. The old hand-
-        -- rolled CFrame correction fought the solver and produced dangle,
-        -- not swing. Visible=false — the Beam is the visible strand.
         Swing.Rope = Instance.new("RopeConstraint")
         Swing.Rope.Attachment0 = Swing.Attach0
         Swing.Rope.Attachment1 = Swing.RootAttach
@@ -614,7 +669,7 @@ function Swing.Begin()
         Swing.Rope.Visible = false
         Swing.Rope.Parent = RootPart
 
-        Swing.HandAttach = handAttachment(getWebHand(false))
+        Swing.HandAttach = handAttachment(getWebHand(isLeft))
         Swing.Beam = createWebBeam(Swing.Attach0, Swing.HandAttach)
         webMaid:Give(Swing.Attach0)
         webMaid:Give(Swing.RootAttach)
@@ -622,7 +677,9 @@ function Swing.Begin()
         webMaid:Give(Swing.HandAttach)
         webMaid:Give(Swing.Beam)
 
-        -- LIFT-OFF IMPULSE: this is what makes holding E carry you forward
+        playSound("rbxasset://sounds/action_swish.mp3", 0.65, 1.25)
+
+        -- Initial launch impulse
         local look = Camera.CFrame.LookVector
         local flat = Vector3.new(look.X, 0, look.Z)
         flat = (flat.Magnitude > 0.05) and flat.Unit or Vector3.new(0, 0, -1)
@@ -644,13 +701,11 @@ function Swing.Step(dt)
                 Camera = Workspace.CurrentCamera
                 if not Camera then return end
         end
-        -- if another system destroyed the rope hardware, bail out cleanly
         if not Swing.Rope or not Swing.Rope.Parent then
                 Swing.End(true)
                 return
         end
 
-        -- keep the humanoid airborne so ground friction never fights the rope
         local hState = Humanoid and Humanoid:GetState()
         if Humanoid and Humanoid.Parent
                 and hState ~= Enum.HumanoidStateType.Freefall
@@ -661,8 +716,7 @@ function Swing.Step(dt)
         local vel = RootPart.AssemblyLinearVelocity
         local horiz = Vector3.new(vel.X, 0, vel.Z)
 
-        -- continuous forward drive while holding E (pumps the pendulum arc):
-        -- thrust along the camera's flat XZ look direction, capped at max speed
+        -- Continuous forward thrust
         if horiz.Magnitude < CONFIG.SwingMaxSpeed then
                 local look = Camera.CFrame.LookVector
                 local flatLook = Vector3.new(look.X, 0, look.Z)
@@ -670,28 +724,26 @@ function Swing.Step(dt)
                 vel = vel + flatLook * CONFIG.SwingThrust * dt
         end
 
-        -- WASD air steering on the arc
+        -- WASD air steering & framerate-independent coast decay
         local steer = getCameraSteer()
         if steer.Magnitude > 0.01 then
                 vel = vel + steer * CONFIG.SwingSteerAccel * dt
         else
-                -- gentle coast decay when the stick is neutral
-                vel = Vector3.new(vel.X * CONFIG.SwingDragXZ, vel.Y, vel.Z * CONFIG.SwingDragXZ)
+                local drag = math.pow(CONFIG.SwingDragXZ, dt * 60)
+                vel = Vector3.new(vel.X * drag, vel.Y, vel.Z * drag)
         end
 
-        -- W REEL-IN: dynamically shorten the RopeConstraint while held —
-        -- pulls the arc tighter and converts height into swing speed
+        -- W reel-in / S extend-lowering
         if moveKeys.W and Swing.Rope.Length > 14 then
                 Swing.Rope.Length = math.max(Swing.Rope.Length - CONFIG.SwingWReel * dt, 14)
+                Swing.RopeLength = Swing.Rope.Length
+        elseif moveKeys.S and Swing.Rope.Length < CONFIG.SwingMaxDistance then
+                Swing.Rope.Length = math.min(Swing.Rope.Length + CONFIG.SwingSExtend * dt, CONFIG.SwingMaxDistance)
                 Swing.RopeLength = Swing.Rope.Length
         end
         RootPart.AssemblyLinearVelocity = vel
 
-        -- Procedural body roll (up to 18° into the swing arc).
-        -- NOTE: the literal spec expression Velocity:Dot(Velocity:Cross(up)) is
-        -- degenerate (always 0), so roll is driven by the signed angular
-        -- velocity of the horizontal velocity vector instead — same 0.2 gain
-        -- family, clamped to ±18°.
+        -- Procedural body roll
         local flat = Vector3.new(vel.X, 0, vel.Z)
         if flat.Magnitude > 4 then
                 local curDir = flat.Unit
@@ -701,14 +753,38 @@ function Swing.Step(dt)
                         local turnDeg = math.deg(math.atan2(crossY, dot))
                         local rollDeg = math.clamp(turnDeg * 6 * CONFIG.SwingRollFactor, -CONFIG.SwingRollMaxDeg, CONFIG.SwingRollMaxDeg)
                         local targetCF = CFrame.lookAt(RootPart.Position, RootPart.Position + curDir) * CFrame.Angles(0, 0, math.rad(rollDeg))
-                        RootPart.CFrame = RootPart.CFrame:Lerp(targetCF, 0.25)
+                        RootPart.CFrame = RootPart.CFrame:Lerp(targetCF, math.clamp(dt * 15, 0, 1))
                 end
                 Swing.PrevDir = curDir
         else
                 Swing.PrevDir = nil
         end
 
-        -- Grounded bail-out (only after the swing has had time to lift off)
+        -- Procedural arm aiming toward anchor point
+        local armKey = Swing.IsLeft and "LeftShoulder" or "RightShoulder"
+        local otherKey = Swing.IsLeft and "RightShoulder" or "LeftShoulder"
+        local reachArm = Rig.Joints[armKey]
+        local trailArm = Rig.Joints[otherKey]
+        if reachArm and reachArm.Motor and reachArm.Motor.Parent then
+                local reachCF
+                if Rig.IsR15 then
+                        reachCF = Swing.IsLeft and CFrame.Angles(math.rad(135), 0, math.rad(25)) or CFrame.Angles(math.rad(135), 0, -math.rad(25))
+                else
+                        reachCF = Swing.IsLeft and CFrame.Angles(0, 0, -math.rad(135)) or CFrame.Angles(0, 0, math.rad(135))
+                end
+                reachArm.Motor.C0 = reachArm.Motor.C0:Lerp(reachArm.C0 * reachCF, math.clamp(dt * 14, 0, 1))
+        end
+        if trailArm and trailArm.Motor and trailArm.Motor.Parent then
+                local trailCF
+                if Rig.IsR15 then
+                        trailCF = Swing.IsLeft and CFrame.Angles(-math.rad(25), 0, -math.rad(15)) or CFrame.Angles(-math.rad(25), 0, math.rad(15))
+                else
+                        trailCF = Swing.IsLeft and CFrame.Angles(0, 0, math.rad(25)) or CFrame.Angles(0, 0, -math.rad(25))
+                end
+                trailArm.Motor.C0 = trailArm.Motor.C0:Lerp(trailArm.C0 * trailCF, math.clamp(dt * 14, 0, 1))
+        end
+
+        -- Grounded bail-out
         if os.clock() - Swing.StartClock > 0.5
                 and Humanoid.FloorMaterial ~= Enum.Material.Air
                 and vel.Magnitude < 10 then
@@ -717,7 +793,6 @@ function Swing.Step(dt)
 end
 
 function Swing.End(keepMomentum)
-        -- keepMomentum: released velocity persists naturally on the root
         if not Swing.Active then return end
         Swing.Active = false
         Swing.AnchorPart = nil
@@ -729,9 +804,7 @@ function Swing.End(keepMomentum)
         Swing.Beam = nil
         Swing.PrevDir = nil
         releaseWebs()
-        -- SLINGSHOT FLING: the swing Maid was already cleaned up via
-        -- releaseWebs(); pop upward and preserve + multiply the forward
-        -- horizontal momentum so you slingshot seamlessly out of the arc
+
         if keepMomentum ~= false and RootPart and RootPart.Parent
                 and Humanoid and Humanoid.Parent
                 and Humanoid.FloorMaterial == Enum.Material.Air then
@@ -739,7 +812,16 @@ function Swing.End(keepMomentum)
                 local flat = Vector3.new(v.X, 0, v.Z) * CONFIG.SwingReleaseBoost
                 local up = math.max(v.Y, CONFIG.SwingReleasePop)
                 RootPart.AssemblyLinearVelocity = Vector3.new(flat.X, up, flat.Z)
+                playSound("rbxasset://sounds/action_jump.mp3", 0.65, 1.1)
         end
+
+        for _, jointName in ipairs({ "RightShoulder", "LeftShoulder" }) do
+                local data = Rig.Joints[jointName]
+                if data and data.Motor and data.Motor.Parent then
+                        data.Motor.C0 = data.C0
+                end
+        end
+
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
         end
@@ -749,8 +831,7 @@ function Swing.End(keepMomentum)
 end
 
 --======================================================================
--- [B] POINT LAUNCH  (Tap F)  + 3-second Space boost window
---      (assigns to the forward-declared local — do NOT redeclare)
+-- [B] POINT LAUNCH  (Tap F)  + Perch & Boost Window
 --======================================================================
 PointLaunch = {
         Pulling = false, Arrived = false, Target = nil,
@@ -783,20 +864,42 @@ function PointLaunch.Begin()
         PointLaunch.Target = hit.Position
         PointLaunch.StartTime = os.clock()
 
-        local handAtt = handAttachment(getWebHand(false))
+        -- Dual webs from Left and Right hands
+        local handL = handAttachment(getWebHand(true))
+        local handR = handAttachment(getWebHand(false))
         local a0 = anchorAttachment(hit.Instance, hit.Position)
-        local beam = createWebBeam(a0, handAtt)
-        webMaid:Give(handAtt)
+        local beamL = createWebBeam(a0, handL)
+        local beamR = createWebBeam(a0, handR)
+        webMaid:Give(handL)
+        webMaid:Give(handR)
         webMaid:Give(a0)
-        webMaid:Give(beam)
+        webMaid:Give(beamL)
+        webMaid:Give(beamR)
 
+        playSound("rbxasset://sounds/action_swish.mp3", 0.7, 1.25)
+        Humanoid.AutoRotate = false
+        Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
         StateManager.Set(StateManager.States.PointLaunching, true)
 end
 
 function PointLaunch.Step(dt)
-        if not PointLaunch.Pulling or not (RootPart and RootPart.Parent) then return end
+        if not (RootPart and RootPart.Parent) then return end
 
-        -- hard timeout
+        -- Perched state: stable perch with zero downward slide
+        if PointLaunch.Arrived then
+                local x, z = getInputVector()
+                if x ~= 0 or z ~= 0 then
+                        PointLaunch.Cancel()
+                        return
+                end
+                local perchedCF = CFrame.lookAt(PointLaunch.Target + Vector3.new(0, 1.2, 0), PointLaunch.Target + Vector3.new(0, 1.2, 0) + Camera.CFrame.LookVector)
+                RootPart.CFrame = RootPart.CFrame:Lerp(perchedCF, math.clamp(dt * 20, 0, 1))
+                RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                return
+        end
+
+        if not PointLaunch.Pulling then return end
+
         if os.clock() - PointLaunch.StartTime > CONFIG.LaunchTimeout then
                 PointLaunch.Cancel()
                 return
@@ -804,30 +907,29 @@ function PointLaunch.Step(dt)
 
         local toTarget = PointLaunch.Target - RootPart.Position
         if toTarget.Magnitude < CONFIG.LaunchArriveRadius then
-                -- ARRIVED: halt the pull, open the 3-second boost window
+                -- ARRIVED: perch & open boost window
                 PointLaunch.Pulling = false
                 PointLaunch.Arrived = true
                 PointLaunch.ArrivalTimestamp = os.clock()
                 releaseWebs()
-                RootPart.AssemblyLinearVelocity = RootPart.AssemblyLinearVelocity * 0.15
+                RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                 return
         end
 
-        -- linear pull
+        -- Linear pull
         RootPart.AssemblyLinearVelocity = toTarget.Unit * CONFIG.LaunchSpeed
 
-        -- face the target while pulling
         local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
         if flat.Magnitude > 1 then
                 local targetCF = CFrame.lookAt(RootPart.Position, RootPart.Position + flat.Unit)
-                RootPart.CFrame = RootPart.CFrame:Lerp(targetCF, 0.2)
+                RootPart.CFrame = RootPart.CFrame:Lerp(targetCF, math.clamp(dt * 15, 0, 1))
         end
 end
 
 function PointLaunch.CheckWindow()
         if PointLaunch.Arrived
                 and (os.clock() - PointLaunch.ArrivalTimestamp) > CONFIG.LaunchWindow then
-                PointLaunch.Arrived = false -- stored launch momentum resets to 0
+                PointLaunch.Arrived = false
                 if StateManager.Current == StateManager.States.PointLaunching then
                         StateManager.Set(StateManager.States.Idle, true)
                 end
@@ -835,84 +937,110 @@ function PointLaunch.CheckWindow()
 end
 
 function PointLaunch.TryBoost()
-        if not PointLaunch.Arrived or not (RootPart and RootPart.Parent) then
-                return false
-        end
-        local elapsed = os.clock() - PointLaunch.ArrivalTimestamp
-        if elapsed <= CONFIG.LaunchWindow then
-                -- BOOST: camera look * 130 + up * 45
-                local boost = Camera.CFrame.LookVector * CONFIG.BoostLookSpeed
-                        + Vector3.new(0, CONFIG.BoostUpSpeed, 0)
+        if not (RootPart and RootPart.Parent) then return false end
+        -- 1) Mid-Flight Zip Boost
+        if PointLaunch.Pulling then
+                PointLaunch.Pulling = false
+                releaseWebs()
+                local boost = Camera.CFrame.LookVector * (CONFIG.LaunchSpeed * 0.95) + Vector3.new(0, 25, 0)
                 RootPart.AssemblyLinearVelocity = boost
-                PointLaunch.Arrived = false
                 StateManager.Set(StateManager.States.Idle, true)
                 cameraPulse(0.35)
+                playSound("rbxasset://sounds/action_jump.mp3", 0.75, 1.2)
                 return true
         end
-        -- window expired: default Roblox jump instead
-        PointLaunch.Arrived = false
-        if StateManager.Current == StateManager.States.PointLaunching then
-                StateManager.Set(StateManager.States.Idle, true)
+        -- 2) Perched Launch Boost
+        if PointLaunch.Arrived then
+                local elapsed = os.clock() - PointLaunch.ArrivalTimestamp
+                if elapsed <= CONFIG.LaunchWindow then
+                        local boost = Camera.CFrame.LookVector * CONFIG.BoostLookSpeed + Vector3.new(0, CONFIG.BoostUpSpeed, 0)
+                        RootPart.AssemblyLinearVelocity = boost
+                        PointLaunch.Arrived = false
+                        StateManager.Set(StateManager.States.Idle, true)
+                        cameraPulse(0.35)
+                        playSound("rbxasset://sounds/action_jump.mp3", 0.8, 1.25)
+                        return true
+                end
+                PointLaunch.Arrived = false
+                if StateManager.Current == StateManager.States.PointLaunching then
+                        StateManager.Set(StateManager.States.Idle, true)
+                end
+                if Humanoid then
+                        Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+                return true
         end
-        if Humanoid then
-                Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-        end
-        return true
+        return false
 end
 
 function PointLaunch.Cancel()
         PointLaunch.Pulling = false
         PointLaunch.Arrived = false
+        PointLaunch.Target = nil
         releaseWebs()
+        if Humanoid and Humanoid.Parent then
+                Humanoid.AutoRotate = true
+        end
         if StateManager.Current == StateManager.States.PointLaunching then
                 StateManager.Set(StateManager.States.Idle, true)
         end
 end
 
 --======================================================================
--- [C] TIGHT GAP ZIP  (Tap Space near narrow gaps)
---      (assigns to the forward-declared local — do NOT redeclare)
+-- [C] TIGHT GAP ZIP  (Tap Space near narrow openings)
 --======================================================================
-GapZip = { Active = false, Token = 0 }
+GapZip = { Active = false, Token = 0, Collisions = {} }
 
 local function detectGap()
-        if not RootPart then return nil end
+        if not (RootPart and Camera) then return nil end
         local look  = Camera.CFrame.LookVector
         local right = Camera.CFrame.RightVector
-        local shoulderBase = RootPart.Position + Vector3.new(0, 0.5, 0)
+        local origin = RootPart.Position + Vector3.new(0, 0.5, 0)
+
+        local centerHit = Workspace:Raycast(origin, look * 60, RayParams)
+        local centerDist = centerHit and centerHit.Distance or 60
+
         local halfSpace = CONFIG.GapShoulderSpacing * 0.5
+        local hitL = Workspace:Raycast(origin - right * halfSpace, look * 45, RayParams)
+        local hitR = Workspace:Raycast(origin + right * halfSpace, look * 45, RayParams)
 
-        -- two parallel forward rays from the shoulders, 3.5 studs apart
-        local hitL = Workspace:Raycast(shoulderBase - right * halfSpace, look * 60, RayParams)
-        local hitR = Workspace:Raycast(shoulderBase + right * halfSpace, look * 60, RayParams)
-        if not (hitL and hitR) then return nil end
-
-        -- surfaces must be opposing parallel faces (slot / crevice walls)
-        if hitL.Normal:Dot(hitR.Normal) > -0.6 then return nil end
-
-        local clearance = (hitL.Position - hitR.Position).Magnitude
-        if clearance > CONFIG.GapMaxClearance or clearance < 0.5 then return nil end
-
-        local midPos = (hitL.Position + hitR.Position) * 0.5
-        local exitPos = midPos + look * (clearance * 0.5 + 3.5)
-
-        -- make sure the exit point is not buried inside geometry
-        local lookFlat = Vector3.new(look.X, 0, look.Z)
-        lookFlat = (lookFlat.Magnitude > 0.05) and lookFlat.Unit or Vector3.new(0, 0, -1)
-        local back = Workspace:Raycast(exitPos, (midPos - exitPos).Unit * 8, RayParams)
-        if back and (exitPos - back.Position).Magnitude < 1.5 then
-                exitPos = exitPos + lookFlat * 2.5
+        -- Case A: Flanking obstacles with open center passage
+        if hitL and hitR then
+                local clearance = (hitL.Position - hitR.Position).Magnitude
+                local avgDist = (hitL.Distance + hitR.Distance) * 0.5
+                if clearance <= CONFIG.GapMaxClearance and clearance >= 1.5 and centerDist > avgDist + 6 then
+                        local midPos = (hitL.Position + hitR.Position) * 0.5
+                        local exitPos = midPos + look * (clearance * 0.5 + 4.5)
+                        return midPos, exitPos, hitL.Position, hitR.Position
+                end
         end
-        return midPos, exitPos
+
+        -- Case B: Narrow slot / crevice interior
+        for _, probeDist in ipairs({ 12, 20, 30 }) do
+                if centerDist > probeDist + 5 then
+                        local probeCenter = origin + look * probeDist
+                        local sideL = Workspace:Raycast(probeCenter, -right * (CONFIG.GapMaxClearance * 0.6), RayParams)
+                        local sideR = Workspace:Raycast(probeCenter, right * (CONFIG.GapMaxClearance * 0.6), RayParams)
+                        if sideL and sideR then
+                                local clearance = (sideL.Position - sideR.Position).Magnitude
+                                if clearance <= CONFIG.GapMaxClearance and clearance >= 1.5 then
+                                        local midPos = (sideL.Position + sideR.Position) * 0.5
+                                        local exitPos = midPos + look * 8
+                                        return midPos, exitPos, sideL.Position, sideR.Position
+                                end
+                        end
+                end
+        end
+        return nil
 end
 
-function GapZip.Begin()
-        if StateManager.Current == StateManager.States.SlingshotCharging then return end
-        if GapZip.Active then return end
-        if not (RootPart and Humanoid) then return end
+function GapZip.TryBegin()
+        if StateManager.Current == StateManager.States.SlingshotCharging then return false end
+        if GapZip.Active then return false end
+        if not (RootPart and Humanoid) then return false end
 
-        local midPos, exitPos = detectGap()
-        if not midPos then return end
+        local midPos, exitPos, hitLPos, hitRPos = detectGap()
+        if not midPos then return false end
 
         GapZip.Active = true
         GapZip.Token = GapZip.Token + 1
@@ -926,22 +1054,33 @@ function GapZip.Begin()
         Humanoid.AutoRotate = false
         Humanoid:ChangeState(Enum.HumanoidStateType.Physics)
 
+        -- Dual web strands pulling through the gap
+        if hitLPos and hitRPos then
+                local handL = handAttachment(getWebHand(true))
+                local handR = handAttachment(getWebHand(false))
+                local aL = anchorAttachment(nil, hitLPos)
+                local aR = anchorAttachment(nil, hitRPos)
+                local beamL = createWebBeam(aL, handL)
+                local beamR = createWebBeam(aR, handR)
+                webMaid:Give(handL)
+                webMaid:Give(handR)
+                webMaid:Give(aL)
+                webMaid:Give(aR)
+                webMaid:Give(beamL)
+                webMaid:Give(beamR)
+        end
+        playSound("rbxasset://sounds/action_swish.mp3", 0.7, 1.35)
+
         local startPos = RootPart.Position
         local entrySpeed = RootPart.AssemblyLinearVelocity.Magnitude
         local flatLook = Vector3.new(Camera.CFrame.LookVector.X, 0, Camera.CFrame.LookVector.Z)
-        local yawCF
-        if flatLook.Magnitude > 0.05 then
-                yawCF = CFrame.lookAt(Vector3.new(0, 0, 0), flatLook.Unit)
-        else
-                yawCF = CFrame.new()
-        end
+        local yawCF = (flatLook.Magnitude > 0.05) and CFrame.lookAt(Vector3.new(0, 0, 0), flatLook.Unit) or CFrame.new()
 
-        -- bypass collision hitboxes during the pass-through
-        local originalCollisions = {}
+        GapZip.Collisions = {}
         if Character then
                 for _, part in ipairs(Character:GetChildren()) do
                         if part:IsA("BasePart") then
-                                originalCollisions[part] = part.CanCollide
+                                GapZip.Collisions[part] = part.CanCollide
                                 part.CanCollide = false
                         end
                 end
@@ -952,6 +1091,7 @@ function GapZip.Begin()
         conn = RunService.Heartbeat:Connect(function()
                 if token ~= GapZip.Token or Engine.Destroyed or not (RootPart and RootPart.Parent) then
                         conn:Disconnect()
+                        GapZip.RestoreCollisions()
                         return
                 end
                 local alpha = math.clamp((os.clock() - t0) / CONFIG.GapZipDuration, 0, 1)
@@ -959,32 +1099,44 @@ function GapZip.Begin()
                 RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                 if alpha >= 1 then
                         conn:Disconnect()
-                        for part, canCollide in pairs(originalCollisions) do
-                                if part.Parent then
-                                        part.CanCollide = canCollide
-                                end
-                        end
+                        GapZip.RestoreCollisions()
+                        releaseWebs()
                         local exitVel = Camera.CFrame.LookVector * (entrySpeed + CONFIG.GapExitBoost)
-                        RootPart.AssemblyLinearVelocity = Vector3.new(exitVel.X, math.max(exitVel.Y, 6), exitVel.Z)
+                        RootPart.AssemblyLinearVelocity = Vector3.new(exitVel.X, math.max(exitVel.Y, 8), exitVel.Z)
                         if Humanoid and Humanoid.Parent then
                                 Humanoid.AutoRotate = true
                                 Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
                         end
                         GapZip.Active = false
                         StateManager.Set(StateManager.States.Idle, true)
+                        cameraPulse(0.3)
+                        playSound("rbxasset://sounds/action_jump.mp3", 0.7, 1.2)
                 end
         end)
         lifeMaid:Give(conn)
+        return true
+end
+
+function GapZip.RestoreCollisions()
+        if GapZip.Collisions then
+                for part, canCollide in pairs(GapZip.Collisions) do
+                        if part and part.Parent then
+                                part.CanCollide = canCollide
+                        end
+                end
+                GapZip.Collisions = {}
+        end
 end
 
 --======================================================================
--- [D] DUAL-WEB GROUND SLINGSHOT  (Tap R twice, walk back with S, tap R)
+-- [D] DUAL-WEB GROUND SLINGSHOT  (Tap R, walk back with S, release)
 --======================================================================
 local Sling = {
         Phase = 0, T = 0, InitialDist = 0,
         AnchorA = nil, AnchorB = nil,
         AttachA = nil, AttachB = nil,
         BeamA = nil, BeamB = nil, HandA = nil, HandB = nil,
+        PhaseStartTime = 0,
 }
 
 local COL_WHITE  = Color3.fromRGB(240, 240, 255)
@@ -1003,35 +1155,73 @@ local function slingRaycast(sideSign)
         local right = Camera.CFrame.RightVector
         local dir = look + right * sideSign * 0.85 + Vector3.new(0, 0.35, 0)
         if dir.Magnitude < 0.05 then return nil end
-        return Workspace:Raycast(Camera.CFrame.Position, dir.Unit * 90, RayParams)
+        return Workspace:Raycast(Camera.CFrame.Position, dir.Unit * 95, RayParams)
 end
 
 function Sling.Begin()
         if not (RootPart and Humanoid) then return end
-        if Humanoid.FloorMaterial == Enum.Material.Air then return end -- ground only
+        if Humanoid.FloorMaterial == Enum.Material.Air then return end
 
         if Sling.Phase == 0 then
-                -- PHASE 1: left anchor + web to LeftHand
                 if StateManager.Current ~= StateManager.States.Idle
                         and StateManager.Current ~= StateManager.States.GroundSliding then
                         return
                 end
-                local hit = slingRaycast(-1)
+
+                local hitL = slingRaycast(-1)
+                local hitR = slingRaycast(1)
+
+                -- Instant Dual-Lock
+                if hitL and hitR then
+                        Sling.AnchorA = { Position = hitL.Position, Normal = hitL.Normal, Part = hitL.Instance }
+                        Sling.AttachA = anchorAttachment(hitL.Instance, hitL.Position)
+                        Sling.HandA = handAttachment(getWebHand(true))
+                        Sling.BeamA = createWebBeam(Sling.AttachA, Sling.HandA)
+
+                        Sling.AnchorB = { Position = hitR.Position, Normal = hitR.Normal, Part = hitR.Instance }
+                        Sling.AttachB = anchorAttachment(hitR.Instance, hitR.Position)
+                        Sling.HandB = handAttachment(getWebHand(false))
+                        Sling.BeamB = createWebBeam(Sling.AttachB, Sling.HandB)
+
+                        webMaid:Give(Sling.AttachA)
+                        webMaid:Give(Sling.HandA)
+                        webMaid:Give(Sling.BeamA)
+                        webMaid:Give(Sling.AttachB)
+                        webMaid:Give(Sling.HandB)
+                        webMaid:Give(Sling.BeamB)
+
+                        local mid = (Sling.AnchorA.Position + Sling.AnchorB.Position) * 0.5
+                        Sling.InitialDist = (RootPart.Position - mid).Magnitude
+                        Sling.T = 0
+                        Sling.Phase = 2
+                        Sling.PhaseStartTime = os.clock()
+                        StateManager.Set(StateManager.States.SlingshotCharging, true)
+                        playSound("rbxasset://sounds/action_swish.mp3", 0.65, 1.1)
+                        return
+                end
+
+                local hit = hitL or hitR
+                local isLeft = (hit == hitL)
                 if not hit then return end
+
                 Sling.Phase = 1
+                Sling.PhaseStartTime = os.clock()
                 Sling.AnchorA = { Position = hit.Position, Normal = hit.Normal, Part = hit.Instance }
                 Sling.AttachA = anchorAttachment(hit.Instance, hit.Position)
-                Sling.HandA = handAttachment(getWebHand(true))
+                Sling.HandA = handAttachment(getWebHand(isLeft))
                 Sling.BeamA = createWebBeam(Sling.AttachA, Sling.HandA)
                 webMaid:Give(Sling.AttachA)
                 webMaid:Give(Sling.HandA)
                 webMaid:Give(Sling.BeamA)
                 StateManager.Set(StateManager.States.SlingshotCharging, true)
+                playSound("rbxasset://sounds/action_swish.mp3", 0.5, 1.2)
 
         elseif Sling.Phase == 1 then
-                -- PHASE 2: turn opposite, right anchor + web to RightHand
-                local hit = slingRaycast(1)
-                if not hit then return end
+                local hit = slingRaycast(1) or slingRaycast(1.2)
+                if not hit then
+                        Sling.Cancel()
+                        return
+                end
                 Sling.AnchorB = { Position = hit.Position, Normal = hit.Normal, Part = hit.Instance }
                 Sling.AttachB = anchorAttachment(hit.Instance, hit.Position)
                 Sling.HandB = handAttachment(getWebHand(false))
@@ -1043,36 +1233,41 @@ function Sling.Begin()
                 Sling.InitialDist = (RootPart.Position - mid).Magnitude
                 Sling.T = 0
                 Sling.Phase = 2
+                Sling.PhaseStartTime = os.clock()
+                playSound("rbxasset://sounds/action_swish.mp3", 0.5, 1.2)
 
         elseif Sling.Phase == 2 then
-                -- manual release inside [0.50, 0.99]; auto release happens at T = 1
-                if Sling.T >= CONFIG.SlingMinT and Sling.T < 1.0 then
+                if Sling.T >= CONFIG.SlingMinT then
                         Sling.Launch()
-                elseif Sling.T < CONFIG.SlingMinT then
-                        Sling.Cancel() -- not enough tension: abort
+                else
+                        Sling.Cancel()
                 end
         end
 end
 
 function Sling.Step(dt)
-        if Sling.Phase ~= 2 or not (RootPart and Humanoid) then return end
+        if Sling.Phase == 0 or not (RootPart and Humanoid) then return end
+
+        if os.clock() - Sling.PhaseStartTime > CONFIG.SlingTimeout then
+                Sling.Cancel()
+                return
+        end
+
         if Humanoid.FloorMaterial == Enum.Material.Air then
                 Sling.Cancel()
                 return
         end
 
+        if Sling.Phase ~= 2 then return end
+
         local posA = (Sling.AttachA and Sling.AttachA.WorldPosition) or Sling.AnchorA.Position
         local posB = (Sling.AttachB and Sling.AttachB.WorldPosition) or Sling.AnchorB.Position
         local mid = (posA + posB) * 0.5
 
-        -- tension ratio T = clamp((dist - initial) / maxStretch, 0, 1)
         local currentDist = (RootPart.Position - mid).Magnitude
         Sling.T = math.clamp((currentDist - Sling.InitialDist) / CONFIG.SlingMaxStretch, 0, 1)
-
-        -- progressive slowdown: WalkSpeed = 16 * (1 - T^1.5)  (0 at T = 1)
         Humanoid.WalkSpeed = Rig.DefaultWalkSpeed * (1 - Sling.T ^ 1.5)
 
-        -- heat-up web colors: white -> light yellow -> deep red
         local col = slingColor(Sling.T)
         if Sling.BeamA and Sling.BeamA.Parent then
                 Sling.BeamA.Color = ColorSequence.new(col)
@@ -1081,7 +1276,6 @@ function Sling.Step(dt)
                 Sling.BeamB.Color = ColorSequence.new(col)
         end
 
-        -- automatic release at the 100% elastic limit
         if Sling.T >= 1.0 then
                 Sling.Launch()
         end
@@ -1090,20 +1284,18 @@ end
 function Sling.Launch()
         local T = math.clamp(Sling.T, 0, 1)
         local dir = Camera.CFrame.LookVector + Vector3.new(0, math.sin(math.rad(CONFIG.SlingLaunchAngle)), 0)
-        if dir.Magnitude < 0.05 then
-                dir = Vector3.new(0, 1, 0)
-        else
-                dir = dir.Unit
-        end
+        dir = (dir.Magnitude > 0.05) and dir.Unit or Vector3.new(0, 1, 0)
         Sling.Reset()
         if Humanoid and Humanoid.Parent then
                 Humanoid.WalkSpeed = Rig.DefaultWalkSpeed
+                Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
         end
         if RootPart and RootPart.Parent then
                 RootPart.AssemblyLinearVelocity = dir * (T * CONFIG.SlingMaxSpeed)
         end
         StateManager.Set(StateManager.States.Idle, true)
-        cameraPulse(0.45) -- FOV punch + micro shake handled by camera system
+        cameraPulse(0.45)
+        playSound("rbxasset://sounds/action_jump.mp3", 0.9, 1.0)
 end
 
 function Sling.Cancel()
@@ -1131,7 +1323,7 @@ function Sling.Reset()
 end
 
 --======================================================================
--- [E] WALL CRAWL / WALL SPRINT / WALL EJECT
+-- [E] WALL CRAWL / WALL SPRINT / WALL JUMP & LEDGE VAULT
 --======================================================================
 Wall = {
         Crawling = false, Sprinting = false,
@@ -1146,14 +1338,12 @@ local function castWall()
         if flatLook.Magnitude < 0.05 then return nil end
         local hit = Workspace:Raycast(RootPart.Position, flatLook.Unit * CONFIG.WallDetectDist, RayParams)
         if not hit then return nil end
-        -- wall normal must be near-horizontal (vertical surface)
         if math.abs(hit.Normal.Y) > 0.3 then return nil end
         return hit
 end
 
 local function wallPostureCFrame(pos, normal, sprint, travelDir)
         if sprint then
-                -- upright stance relative to the wall plane (wall = floor)
                 local dir = travelDir
                 if not dir or dir.Magnitude < 0.05 then
                         dir = normal:Cross(Vector3.new(0, 1, 0))
@@ -1161,11 +1351,18 @@ local function wallPostureCFrame(pos, normal, sprint, travelDir)
                                 dir = normal:Cross(Vector3.new(1, 0, 0))
                         end
                 end
-                dir = dir.Unit
-                return CFrame.lookAt(pos, pos + dir, normal)
+                return CFrame.lookAt(pos, pos + dir.Unit, normal)
         end
-        -- flat crawl posture: body parallel to the wall (spec formula)
-        return CFrame.lookAt(pos, pos + normal) * CFrame.Angles(-math.pi / 2, 0, 0)
+        -- Crawl: chest flat to wall (-normal), head points along travelDir or up
+        local upDir = travelDir
+        if not upDir or upDir.Magnitude < 0.05 then
+                upDir = Vector3.new(0, 1, 0)
+        else
+                upDir = upDir.Unit
+        end
+        upDir = upDir - normal * upDir:Dot(normal)
+        upDir = (upDir.Magnitude > 0.05) and upDir.Unit or Vector3.new(0, 1, 0)
+        return CFrame.lookAt(pos, pos - normal, upDir)
 end
 
 function Wall.Attach(hit)
@@ -1188,10 +1385,10 @@ function Wall.Attach(hit)
         Humanoid:ChangeState(Enum.HumanoidStateType.Physics)
         RootPart.CFrame = wallPostureCFrame(RootPart.Position, hit.Normal, false, nil)
         RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        playSound("rbxasset://sounds/action_footsteps_plastic.mp3", 0.55, 1.1)
 end
 
 function Wall.Begin()
-        -- manual attach attempt (mobile CLIMB button); keyboard is passive
         if not (RootPart and Humanoid) then return end
         if Wall.Crawling then return end
         if StateManager.Current == StateManager.States.SlingshotCharging then return end
@@ -1209,16 +1406,23 @@ function Wall.Step(dt)
                 return
         end
 
-        -- maintain wall contact; detach if the surface is lost
         local probe = Workspace:Raycast(RootPart.Position, n * -1 * (CONFIG.WallStickOffset + 3), RayParams)
         if not probe or probe.Normal:Dot(n) < 0.6 then
+                -- ROOFTOP LEDGE VAULT: Check if we reached the roof lip!
+                local roofCheck = Workspace:Raycast(RootPart.Position + Vector3.new(0, 2.5, 0) - n * 3.5, Vector3.new(0, -6, 0), RayParams)
+                if roofCheck and roofCheck.Normal.Y > 0.65 then
+                        Wall.Detach()
+                        RootPart.CFrame = CFrame.new(roofCheck.Position + Vector3.new(0, 3, 0), roofCheck.Position + Vector3.new(0, 3, 0) - n)
+                        RootPart.AssemblyLinearVelocity = -n * CONFIG.LedgeVaultForward + Vector3.new(0, CONFIG.LedgeVaultUp, 0)
+                        playSound("rbxasset://sounds/action_jump.mp3", 0.6, 1.2)
+                        return
+                end
                 Wall.Detach()
                 return
         end
         n = probe.Normal
         Wall.WallNormal = n
 
-        -- wall sprint follows the Shift key (Insomniac R2 parkour)
         local wantSprint = Moves[5].Enabled and shiftHeld
         if wantSprint ~= Wall.Sprinting then
                 Wall.Sprinting = wantSprint
@@ -1228,7 +1432,6 @@ function Wall.Step(dt)
         local speed = Wall.Sprinting and CONFIG.SprintSpeed or CONFIG.CrawlSpeed
         local x, z = getInputVector()
 
-        -- move along the wall plane (WASD projected onto the surface)
         local rightOnWall = Camera.CFrame.RightVector - n * Camera.CFrame.RightVector:Dot(n)
         local lookOnWall  = Camera.CFrame.LookVector  - n * Camera.CFrame.LookVector:Dot(n)
         local moveDir = rightOnWall * x + lookOnWall * z
@@ -1237,16 +1440,28 @@ function Wall.Step(dt)
                 moveDir = moveDir.Unit
                 Wall.LastTravel = moveDir
                 pos = pos + moveDir * speed * dt
+
+                -- Procedural crawling limb gait
+                if not Wall.Sprinting then
+                        local cycle = math.sin(os.clock() * 12)
+                        local rArm = Rig.Joints["RightShoulder"]
+                        local lArm = Rig.Joints["LeftShoulder"]
+                        if rArm and rArm.Motor and rArm.Motor.Parent then
+                                rArm.Motor.C0 = rArm.Motor.C0:Lerp(rArm.C0 * CFrame.Angles(math.rad(cycle * 22), 0, 0), 0.3)
+                        end
+                        if lArm and lArm.Motor and lArm.Motor.Parent then
+                                lArm.Motor.C0 = lArm.Motor.C0:Lerp(lArm.C0 * CFrame.Angles(-math.rad(cycle * 22), 0, 0), 0.3)
+                        end
+                end
         end
 
-        -- stick to the surface at the configured offset (zero gravity feel)
         local contact = Workspace:Raycast(pos + n * 2, n * -1 * 8, RayParams)
         if contact then
                 pos = contact.Position + n * CONFIG.WallStickOffset
         end
 
         RootPart.CFrame = RootPart.CFrame:Lerp(
-                wallPostureCFrame(pos, n, Wall.Sprinting, Wall.LastTravel), 0.45
+                wallPostureCFrame(pos, n, Wall.Sprinting, Wall.LastTravel), math.clamp(dt * 18, 0, 1)
         )
         RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
 end
@@ -1258,6 +1473,14 @@ function Wall.Detach()
         Wall.WallNormal = nil
         Wall.WallPart = nil
         Wall.CooldownUntil = os.clock() + CONFIG.ReattachCooldown
+
+        for _, jointName in ipairs({ "RightShoulder", "LeftShoulder" }) do
+                local data = Rig.Joints[jointName]
+                if data and data.Motor and data.Motor.Parent then
+                        data.Motor.C0 = data.C0
+                end
+        end
+
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
                 Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
@@ -1268,7 +1491,6 @@ function Wall.Detach()
         end
 end
 
--- Insomniac-style X / Space jump-off: strong hop away from the wall
 function Wall.JumpOff()
         if not Wall.Crawling or not RootPart then return end
         local n = Wall.WallNormal or Camera.CFrame.LookVector
@@ -1277,7 +1499,8 @@ function Wall.JumpOff()
                 n * CONFIG.WallJumpOut
                 + Vector3.new(0, CONFIG.WallJumpUp, 0)
                 + Camera.CFrame.LookVector * CONFIG.WallJumpLook
-        cameraPulse(0.2)
+        cameraPulse(0.25)
+        playSound("rbxasset://sounds/action_jump.mp3", 0.7, 1.2)
 end
 
 --======================================================================
@@ -1287,7 +1510,7 @@ local Tricks = { Active = false }
 
 function Tricks.Begin()
         if not (RootPart and Humanoid) then return end
-        if Humanoid.FloorMaterial ~= Enum.Material.Air then return end -- airborne only
+        if Humanoid.FloorMaterial ~= Enum.Material.Air then return end
         if Swing.Active or PointLaunch.Pulling or (Wall and Wall.Crawling) then return end
         if GapZip.Active then return end
         if Tricks.Active then return end
@@ -1301,48 +1524,61 @@ end
 function Tricks.Step(dt)
         if not Tricks.Active or not (RootPart and RootPart.Parent) then return end
 
-        -- safety auto-recovery when close to the ground
         if altitudeAboveGround() < CONFIG.TrickMinAltitude then
                 Tricks.End()
                 return
         end
 
         local x, z = getInputVector()
-        -- frame-by-frame angular velocity rotation matrices
+        local flipStep = CONFIG.TrickFlipRate * dt * 60
+        local rollStep = CONFIG.TrickRollRate * dt * 60
+
         if z > 0 then
-                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(math.rad(CONFIG.TrickFlipRate), 0, 0)      -- frontflip
+                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(math.rad(flipStep), 0, 0)
         elseif z < 0 then
-                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(math.rad(-CONFIG.TrickFlipRate), 0, 0)     -- backflip
+                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(math.rad(-flipStep), 0, 0)
         end
         if x ~= 0 then
-                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(0, 0, math.rad(CONFIG.TrickRollRate * x))  -- barrel roll
+                RootPart.CFrame = RootPart.CFrame * CFrame.Angles(0, 0, math.rad(rollStep * x))
         end
 
-        -- procedural limb tuck via Motor6D C0 offsets
+        -- Symmetrical procedural limb tucking
         for _, jointName in ipairs({ "RightShoulder", "LeftShoulder", "RightHip", "LeftHip" }) do
                 local data = Rig.Joints[jointName]
                 if data and data.Motor and data.Motor.Parent then
-                        local isShoulder = (jointName == "RightShoulder" or jointName == "LeftShoulder")
                         local tuckOffset
-                        if isShoulder then
-                                tuckOffset = CFrame.Angles(math.rad(150), 0, math.rad(25))
+                        if Rig.IsR15 then
+                                if jointName == "RightShoulder" then
+                                        tuckOffset = CFrame.Angles(math.rad(140), 0, -math.rad(25))
+                                elseif jointName == "LeftShoulder" then
+                                        tuckOffset = CFrame.Angles(math.rad(140), 0, math.rad(25))
+                                else
+                                        tuckOffset = CFrame.Angles(math.rad(65), 0, 0)
+                                end
                         else
-                                tuckOffset = CFrame.Angles(math.rad(70), 0, 0)
+                                if jointName == "RightShoulder" then
+                                        tuckOffset = CFrame.Angles(0, 0, math.rad(140))
+                                elseif jointName == "LeftShoulder" then
+                                        tuckOffset = CFrame.Angles(0, 0, -math.rad(140))
+                                elseif jointName == "RightHip" then
+                                        tuckOffset = CFrame.Angles(0, 0, math.rad(65))
+                                else
+                                        tuckOffset = CFrame.Angles(0, 0, -math.rad(65))
+                                end
                         end
-                        data.Motor.C0 = data.Motor.C0:Lerp(data.C0 * tuckOffset, 0.2)
+                        data.Motor.C0 = data.Motor.C0:Lerp(data.C0 * tuckOffset, math.clamp(dt * 15, 0, 1))
                 end
         end
 
-        -- keep a minimum drift so tricks never stall mid-air
-        if RootPart.AssemblyLinearVelocity.Magnitude < 20 then
-                RootPart.AssemblyLinearVelocity = Camera.CFrame.LookVector * 24
+        if RootPart.AssemblyLinearVelocity.Magnitude < 22 then
+                RootPart.AssemblyLinearVelocity = Camera.CFrame.LookVector * 26
         end
 end
 
 function Tricks.RestoreJoints()
         for _, data in pairs(Rig.Joints) do
                 if data.Motor and data.Motor.Parent then
-                        data.Motor.C0 = data.Motor.C0:Lerp(data.C0, 0.22)
+                        data.Motor.C0 = data.C0:Lerp(data.C0, 0.22)
                 end
         end
 end
@@ -1350,7 +1586,6 @@ end
 function Tricks.End()
         if not Tricks.Active then return end
         Tricks.Active = false
-        -- safety auto-recovery: lerp joints + CFrame upright over 0.15s
         startUprightRecovery(CONFIG.TrickRecoveryTime, function()
                 if Humanoid and Humanoid.Parent then
                         Humanoid.AutoRotate = true
@@ -1363,19 +1598,20 @@ function Tricks.End()
 end
 
 --======================================================================
--- [G] GROUND SLIDE  (Hold Shift on landing with speed > 45)
+-- [G] GROUND SLIDE  (Landing or Sprinting + Shift)
 --======================================================================
 local Slide = { Active = false, Dir = nil, RestoreProps = nil }
 
 function Slide.TryBegin()
         if Slide.Active then return end
         if not (RootPart and Humanoid) then return end
-        if StateManager.Current ~= StateManager.States.Idle then return end
+        if StateManager.Current ~= StateManager.States.Idle and StateManager.Current ~= StateManager.States.WallCrawling then return end
         if Humanoid.FloorMaterial == Enum.Material.Air then return end
 
         local vel = RootPart.AssemblyLinearVelocity
         local flat = Vector3.new(vel.X, 0, vel.Z)
-        if flat.Magnitude < CONFIG.SlideMinSpeed then return end
+        local minSpeed = sprintActive and CONFIG.SlideSprintMin or CONFIG.SlideMinSpeed
+        if flat.Magnitude < minSpeed then return end
 
         Slide.Active = true
         Slide.Dir = flat.Unit
@@ -1385,16 +1621,19 @@ function Slide.TryBegin()
         Humanoid.AutoRotate = false
         Humanoid:ChangeState(Enum.HumanoidStateType.Physics)
 
-        -- drop the root toward the floor
         RootPart.CFrame = RootPart.CFrame * CFrame.new(0, CONFIG.SlideDropOffset, 0)
-        -- zero-friction physical properties on the root
         RootPart.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0, 0.5, 100, 1)
+
+        if sprintActive and flat.Magnitude < 42 then
+                RootPart.AssemblyLinearVelocity = Slide.Dir * 42 + Vector3.new(0, vel.Y, 0)
+        end
+        cameraPulse(0.2)
+        playSound("rbxasset://sounds/action_footsteps_plastic.mp3", 0.5, 0.8)
 end
 
 function Slide.Step(dt)
         if not Slide.Active or not (RootPart and RootPart.Parent) then return end
 
-        -- allow WASD steering while sliding
         local x, z = getInputVector()
         if x ~= 0 or z ~= 0 then
                 local look = Camera.CFrame.LookVector
@@ -1406,12 +1645,21 @@ function Slide.Step(dt)
                 end
         end
 
+        -- Procedural superhero slide pose
+        local rHip = Rig.Joints["RightHip"]
+        local lHip = Rig.Joints["LeftHip"]
+        if rHip and rHip.Motor and rHip.Motor.Parent then
+                rHip.Motor.C0 = rHip.Motor.C0:Lerp(rHip.C0 * CFrame.Angles(math.rad(75), 0, math.rad(10)), 0.25)
+        end
+        if lHip and lHip.Motor and lHip.Motor.Parent then
+                lHip.Motor.C0 = lHip.Motor.C0:Lerp(lHip.C0 * CFrame.Angles(-math.rad(40), 0, -math.rad(15)), 0.25)
+        end
+
         local vel = RootPart.AssemblyLinearVelocity
         local flat = Vector3.new(vel.X, 0, vel.Z)
         local newSpeed = math.max(flat.Magnitude - CONFIG.SlideDecel * dt, 0)
         RootPart.AssemblyLinearVelocity = Slide.Dir * newSpeed + Vector3.new(0, vel.Y, 0)
 
-        -- end condition: speed below 10 studs/sec or left the floor
         if newSpeed <= CONFIG.SlideEndSpeed or Humanoid.FloorMaterial == Enum.Material.Air then
                 Slide.End()
         end
@@ -1421,10 +1669,14 @@ function Slide.End()
         if not Slide.Active then return end
         Slide.Active = false
         if RootPart and RootPart.Parent then
-                -- unconditional restore: nil is valid and resets to defaults,
-                -- otherwise zero-friction props would leak onto the root
                 RootPart.CustomPhysicalProperties = Slide.RestoreProps
-                RootPart.CFrame = RootPart.CFrame + Vector3.new(0, 1.5, 0) -- pop back up
+                RootPart.CFrame = RootPart.CFrame + Vector3.new(0, 1.5, 0)
+        end
+        for _, jointName in ipairs({ "RightHip", "LeftHip" }) do
+                local data = Rig.Joints[jointName]
+                if data and data.Motor and data.Motor.Parent then
+                        data.Motor.C0 = data.C0
+                end
         end
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
@@ -1434,6 +1686,47 @@ function Slide.End()
         if StateManager.Current == StateManager.States.GroundSliding then
                 StateManager.Set(StateManager.States.Idle, true)
         end
+end
+
+--======================================================================
+-- [H] QUICK AIR WEB ZIP  (Tap Space in mid-air)
+--======================================================================
+AirZip = { CooldownUntil = 0 }
+
+function AirZip.Try()
+        if not Moves[9] or not Moves[9].Enabled then return false end
+        if not (RootPart and Humanoid) then return false end
+        if Humanoid.FloorMaterial ~= Enum.Material.Air then return false end
+        if os.clock() < AirZip.CooldownUntil then return false end
+        if StateManager.Current ~= StateManager.States.Idle then return false end
+
+        AirZip.CooldownUntil = os.clock() + CONFIG.AirZipCooldown
+
+        local look = Camera.CFrame.LookVector
+        local right = Camera.CFrame.RightVector
+        local origin = RootPart.Position
+
+        local attL = Instance.new("Attachment")
+        attL.WorldPosition = origin + look * 80 - right * 10 + Vector3.new(0, 6, 0)
+        attL.Parent = FXFolder
+
+        local attR = Instance.new("Attachment")
+        attR.WorldPosition = origin + look * 80 + right * 10 + Vector3.new(0, 6, 0)
+        attR.Parent = FXFolder
+
+        local handL = handAttachment(getWebHand(true))
+        local handR = handAttachment(getWebHand(false))
+        local beamL = createWebBeam(attL, handL)
+        local beamR = createWebBeam(attR, handR)
+
+        local m = Maid.new()
+        m:Give(attL); m:Give(attR); m:Give(handL); m:Give(handR); m:Give(beamL); m:Give(beamR)
+        task.delay(0.18, function() m:Cleanup() end)
+
+        RootPart.AssemblyLinearVelocity = look * CONFIG.AirZipSpeed + Vector3.new(0, CONFIG.AirZipPop, 0)
+        cameraPulse(0.25)
+        playSound("rbxasset://sounds/action_swish.mp3", 0.75, 1.35)
+        return true
 end
 
 --======================================================================
@@ -1449,10 +1742,16 @@ local function fullCleanup()
         Swing.Rope = nil
         Swing.HandAttach = nil
         Swing.Beam = nil
+        Swing.IsLeft = false
+
         PointLaunch.Pulling = false
         PointLaunch.Arrived = false
+        PointLaunch.Target = nil
+
         GapZip.Active = false
         GapZip.Token = GapZip.Token + 1
+        GapZip.RestoreCollisions()
+
         Sling.Phase = 0
         Sling.T = 0
         Sling.AnchorA = nil
@@ -1463,21 +1762,25 @@ local function fullCleanup()
         Sling.BeamB = nil
         Sling.HandA = nil
         Sling.HandB = nil
+
         Wall.Crawling = false
         Wall.Sprinting = false
         Wall.WallNormal = nil
         Wall.WallPart = nil
+
         Tricks.Active = false
         Slide.Active = false
         if RootPart and RootPart.Parent then
                 RootPart.CustomPhysicalProperties = Slide.RestoreProps
         end
         Slide.RestoreProps = nil
+
         Recovery.Active = false
         Recovery.After = nil
         stuckTimer = 0
         sprintActive = false
         releaseWebs()
+
         if Humanoid and Humanoid.Parent then
                 Humanoid.AutoRotate = true
                 Humanoid.WalkSpeed = Rig.DefaultWalkSpeed
@@ -1497,9 +1800,9 @@ local GUI = nil
 local uiRefs = { BindButtons = {}, ResetButtons = {}, Toggles = {}, Knobs = {} }
 local captureMove = nil
 local panelVisible = true
-local uiMain = nil     -- the draggable main panel frame
-local panelIcon = nil  -- floating re-open icon (shown while panel is hidden)
-local togglePanel      -- forward-declared: header X button + icon call it
+local uiMain = nil
+local panelIcon = nil
+local togglePanel
 
 local THEME = {
         Background = Color3.fromRGB(20, 20, 25),
@@ -1544,7 +1847,7 @@ local function mountGui(gui)
 end
 
 --======================================================================
--- MOBILE TOUCH CANVAS SYSTEM
+-- MOBILE TOUCH CANVAS SYSTEM (Ergonomic 3x3 Responsive Grid)
 --======================================================================
 local mobileEnabled = false
 local mobileLocked = true
@@ -1553,8 +1856,9 @@ local mobileButtons = {}
 local mobileDrag = nil
 
 local MOBILE_SHORT = {
-        [1] = "SWING", [2] = "LAUNCH", [3] = "ZIP",   [4] = "SLING",
-        [5] = "RUN",   [6] = "CLIMB",  [7] = "TRICK", [8] = "SLIDE",
+        [1] = "SWING",   [2] = "LAUNCH", [3] = "GAP ZIP",
+        [4] = "SLING",   [5] = "SPRINT", [6] = "CLIMB",
+        [7] = "TRICK",   [8] = "SLIDE",  [9] = "AIR ZIP",
 }
 
 local function mobileTrigger(index, isDown)
@@ -1575,9 +1879,12 @@ local function mobileTrigger(index, isDown)
                 end
                 return
         end
+
         local move = Moves[index]
         if not move or not move.Enabled then return end
+
         if index == 1 then
+                if Wall.Crawling then Wall.Detach() end
                 Swing.Begin()
         elseif index == 2 then
                 PointLaunch.Begin()
@@ -1591,19 +1898,21 @@ local function mobileTrigger(index, isDown)
                         return
                 end
                 if not PointLaunch.TryBoost() then
-                        GapZip.Begin()
+                        GapZip.TryBegin()
                 end
         elseif index == 4 then
                 Sling.Begin()
         elseif index == 5 then
-                shiftHeld = true -- hold RUN: ground sprint + wall sprint
+                shiftHeld = true
                 Slide.TryBegin()
         elseif index == 6 then
-                Wall.Begin() -- manual attach (climb is passive on keyboard)
+                Wall.Begin()
         elseif index == 7 then
                 Tricks.Begin()
         elseif index == 8 then
                 Slide.TryBegin()
+        elseif index == 9 then
+                AirZip.Try()
         end
 end
 
@@ -1630,39 +1939,37 @@ local function refreshMobileButtons()
         mobileGui.DisplayOrder = 999
 
         local slot = 0
-        for index = 1, 8 do
+        for index = 1, #Moves do
                 local move = Moves[index]
-                if move.Enabled then
+                if move and move.Enabled then
                         slot = slot + 1
-                        local col = (slot - 1) % 2
-                        local row = math.floor((slot - 1) / 2)
+                        local col = (slot - 1) % 3
+                        local row = math.floor((slot - 1) / 3)
                         local btn = Instance.new("TextButton")
                         btn.Name = "Mobile_" .. tostring(index)
-                        btn.Size = UDim2.fromOffset(78, 78)
-                        btn.Position = UDim2.new(1, (col == 0) and -176 or -90, 1, -90 - row * 90)
+                        btn.Size = UDim2.fromOffset(62, 62)
+                        btn.Position = UDim2.new(1, -214 + col * 70, 1, -74 - row * 70)
                         btn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
                         btn.BackgroundTransparency = 0.35
                         btn.BorderSizePixel = 0
                         btn.AutoButtonColor = false
-                        btn.Text = MOBILE_SHORT[index]
+                        btn.Text = MOBILE_SHORT[index] or move.Name
                         btn.TextColor3 = Color3.fromRGB(240, 240, 250)
                         btn.Font = Enum.Font.GothamBold
-                        btn.TextSize = 13
-                        addCorner(btn, 14)
+                        btn.TextSize = 11
+                        addCorner(btn, 12)
                         local stroke = Instance.new("UIStroke")
                         stroke.Color = THEME.Yellow
                         stroke.Thickness = 2
-                        stroke.Transparency = mobileLocked and 1 or 0 -- yellow border only when UNLOCKED
+                        stroke.Transparency = mobileLocked and 1 or 0
                         stroke.Parent = btn
 
                         btn.InputBegan:Connect(function(input)
                                 local t = input.UserInputType
                                 if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
                                         if not mobileLocked then
-                                                -- UNLOCKED: drag-and-drop repositioning mode
-                                                mobileDrag = { Btn = btn, StartInput = input.Position, StartPos = btn.Position }
+                                                mobileDrag = { Btn = btn, Input = input, StartInput = input.Position, StartPos = btn.Position }
                                         else
-                                                -- LOCKED: taps trigger the move cleanly
                                                 mobileTrigger(index, true)
                                         end
                                 end
@@ -1670,7 +1977,7 @@ local function refreshMobileButtons()
                         btn.InputEnded:Connect(function(input)
                                 local t = input.UserInputType
                                 if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
-                                        if mobileDrag and mobileDrag.Btn == btn then
+                                        if mobileDrag and mobileDrag.Input == input then
                                                 mobileDrag = nil
                                         end
                                         if mobileLocked then
@@ -1720,7 +2027,6 @@ local function buildMoveRow(parent, move, index)
                 TextTruncate = Enum.TextTruncate.AtEnd,
         }, row)
 
-        -- enable / disable toggle switch
         local toggleBtn = make("TextButton", {
                 Size = UDim2.fromOffset(42, 22),
                 Position = UDim2.new(0, 164, 0.5, -11),
@@ -1738,7 +2044,6 @@ local function buildMoveRow(parent, move, index)
         }, toggleBtn)
         addCorner(knob, 8)
 
-        -- keybind rebind button
         local bindBtn = make("TextButton", {
                 Size = UDim2.fromOffset(116, 24),
                 Position = UDim2.new(0, 214, 0.5, -12),
@@ -1752,7 +2057,6 @@ local function buildMoveRow(parent, move, index)
         }, row)
         addCorner(bindBtn, 6)
 
-        -- factory reset button
         local resetBtn = make("TextButton", {
                 Size = UDim2.fromOffset(46, 24),
                 Position = UDim2.new(0, 336, 0.5, -12),
@@ -1778,7 +2082,7 @@ local function buildMoveRow(parent, move, index)
         end)
 
         bindBtn.Activated:Connect(function()
-                if not move.Key then return end -- passive system: nothing to bind
+                if not move.Key then return end
                 captureMove = index
                 bindBtn.Text = "...Press Key..."
                 bindBtn.TextColor3 = THEME.Yellow
@@ -1851,10 +2155,10 @@ local function buildUI()
 
         local main = make("Frame", {
                 Name = "MainPanel",
-                Size = UDim2.fromOffset(450, 380),
-                Position = UDim2.new(0.5, -225, 0.5, -190),
+                Size = UDim2.fromOffset(450, 390),
+                Position = UDim2.new(0.5, -225, 0.5, -195),
                 BackgroundColor3 = THEME.Background,
-                BackgroundTransparency = 0.2, -- dark glassmorphism
+                BackgroundTransparency = 0.2,
                 BorderSizePixel = 0,
                 Active = true,
         }, GUI)
@@ -1865,7 +2169,6 @@ local function buildUI()
         outline.Parent = main
         uiMain = main
 
-        -- draggable header
         local header = make("Frame", {
                 Name = "Header",
                 Size = UDim2.new(1, 0, 0, 36),
@@ -1888,7 +2191,7 @@ local function buildUI()
                 Size = UDim2.new(1, -90, 1, 0),
                 Position = UDim2.new(0, 24, 0, 0),
                 BackgroundTransparency = 1,
-                Text = "SPIDER-MAN MOVEMENT ENGINE v3.4",
+                Text = "SPIDER-MAN MOVEMENT ENGINE v3.5",
                 TextColor3 = THEME.Text,
                 Font = Enum.Font.GothamBold,
                 TextSize = 13,
@@ -1907,7 +2210,6 @@ local function buildUI()
                 TextXAlignment = Enum.TextXAlignment.Right,
         }, header)
 
-        -- close button: mobile players cannot press RightShift
         local closeBtn = make("TextButton", {
                 Size = UDim2.fromOffset(26, 26),
                 Position = UDim2.new(1, -34, 0.5, -13),
@@ -1934,7 +2236,8 @@ local function buildUI()
                 BorderSizePixel = 0,
                 ScrollBarThickness = 5,
                 ScrollBarImageColor3 = Color3.fromRGB(120, 120, 150),
-                CanvasSize = UDim2.fromOffset(0, 448),
+                AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y,
+                CanvasSize = UDim2.new(0, 0, 0, 0),
         }, main)
 
         local layout = Instance.new("UIListLayout")
@@ -1942,55 +2245,47 @@ local function buildUI()
         layout.SortOrder = Enum.SortOrder.LayoutOrder
         layout.Parent = scroll
 
-        for index = 1, 8 do
+        for index = 1, #Moves do
                 buildMoveRow(scroll, Moves[index], index)
         end
-        buildMobileRow(scroll, 9, "Enable Mobile Buttons", function(state)
+        buildMobileRow(scroll, 10, "Enable Mobile Buttons", function(state)
                 mobileEnabled = state
                 refreshMobileButtons()
         end, mobileEnabled)
-        buildMobileRow(scroll, 10, "Lock Mobile Layout", function(state)
+        buildMobileRow(scroll, 11, "Lock Mobile Layout", function(state)
                 mobileLocked = state
                 updateMobileLockVisual()
         end, mobileLocked)
 
-        -- header drag logic (mouse + touch delta)
-        local dragging = false
-        local dragStart, startPos
+        local headerDrag = nil
         header.InputBegan:Connect(function(input)
                 local t = input.UserInputType
                 if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-                        dragging = true
-                        dragStart = input.Position
-                        startPos = main.Position
+                        headerDrag = { Input = input, StartInput = input.Position, StartPos = main.Position }
                 end
         end)
         header.InputEnded:Connect(function(input)
-                local t = input.UserInputType
-                if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-                        dragging = false
+                if headerDrag and headerDrag.Input == input then
+                        headerDrag = nil
                 end
         end)
 
-        -- floating re-open icon: movable; a tap (no drag) re-opens the panel.
-        -- Mobile players cannot press RightShift, so this is the way back
-        -- into the panel once it is closed.
         local iconDrag = nil
         local icon = make("TextButton", {
                 Name = "SpideyToggleIcon",
-                Size = UDim2.fromOffset(54, 54),
-                Position = UDim2.new(1, -74, 0.3, 0),
+                Size = UDim2.fromOffset(52, 52),
+                Position = UDim2.new(1, -70, 0.3, 0),
                 BackgroundColor3 = THEME.Accent,
                 Text = "S",
                 TextColor3 = Color3.fromRGB(255, 255, 255),
                 Font = Enum.Font.GothamBlack,
-                TextSize = 26,
+                TextSize = 24,
                 BorderSizePixel = 0,
                 AutoButtonColor = false,
                 Active = true,
                 Visible = false,
         }, GUI)
-        addCorner(icon, 27)
+        addCorner(icon, 26)
         local iconStroke = Instance.new("UIStroke")
         iconStroke.Color = Color3.fromRGB(255, 255, 255)
         iconStroke.Transparency = 0.35
@@ -2001,13 +2296,12 @@ local function buildUI()
         icon.InputBegan:Connect(function(input)
                 local t = input.UserInputType
                 if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
-                        iconDrag = { StartInput = input.Position, StartPos = icon.Position, Moved = false }
+                        iconDrag = { Input = input, StartInput = input.Position, StartPos = icon.Position, Moved = false }
                 end
         end)
         icon.InputEnded:Connect(function(input)
-                local t = input.UserInputType
-                if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then
-                        if iconDrag and not iconDrag.Moved then
+                if iconDrag and iconDrag.Input == input then
+                        if not iconDrag.Moved then
                                 togglePanel()
                         end
                         iconDrag = nil
@@ -2016,19 +2310,19 @@ local function buildUI()
 
         track(UserInputService.InputChanged:Connect(function(input)
                 local t = input.UserInputType
-                if dragging and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
-                        local delta = input.Position - dragStart
+                if headerDrag and headerDrag.Input == input then
+                        local delta = input.Position - headerDrag.StartInput
                         main.Position = UDim2.new(
-                                startPos.X.Scale, startPos.X.Offset + delta.X,
-                                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                                headerDrag.StartPos.X.Scale, headerDrag.StartPos.X.Offset + delta.X,
+                                headerDrag.StartPos.Y.Scale, headerDrag.StartPos.Y.Offset + delta.Y
                         )
-                elseif mobileDrag and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
+                elseif mobileDrag and mobileDrag.Input == input then
                         local delta = input.Position - mobileDrag.StartInput
                         mobileDrag.Btn.Position = UDim2.new(
                                 mobileDrag.StartPos.X.Scale, mobileDrag.StartPos.X.Offset + delta.X,
                                 mobileDrag.StartPos.Y.Scale, mobileDrag.StartPos.Y.Offset + delta.Y
                         )
-                elseif iconDrag and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
+                elseif iconDrag and iconDrag.Input == input then
                         local delta = input.Position - iconDrag.StartInput
                         if delta.Magnitude > 6 then
                                 iconDrag.Moved = true
@@ -2065,7 +2359,7 @@ local function finishCapture(key)
                 Moves[index].Key = key
         end
         if btn then
-                btn.Text = Moves[index].Key.Name
+                btn.Text = Moves[index].Key and Moves[index].Key.Name or "AUTO"
                 btn.TextColor3 = THEME.Text
         end
 end
@@ -2074,7 +2368,7 @@ end
 -- KEYBOARD ROUTING
 --======================================================================
 local function handleKeyBegan(key)
-        -- E: web swing ONLY (Insomniac R2) — detaches from walls first
+        -- E: Web Swing
         if key == Moves[1].Key then
                 if Moves[1].Enabled then
                         if Wall.Crawling then
@@ -2085,33 +2379,41 @@ local function handleKeyBegan(key)
                 return
         end
 
+        -- F: Point Launch
         if key == Moves[2].Key and Moves[2].Enabled then
                 PointLaunch.Begin()
                 return
         end
 
-        if key == Moves[3].Key then
-                -- Space: wall jump-off > swing release-jump > boost > gap zip
+        -- Space: Wall Jump > Swing Pop > Mid/Perch Boost > Gap Zip > Quick Air Zip
+        if key == Moves[3].Key or key == Enum.KeyCode.Space then
                 if Wall.Crawling or StateManager.Current == StateManager.States.WallSprinting then
                         Wall.JumpOff()
                         return
                 end
                 if StateManager.Current == StateManager.States.Swinging and Swing.Active then
-                        Swing.End(true) -- Insomniac X: let go of the web with a hop
+                        Swing.End(true)
                         return
                 end
-                if not PointLaunch.TryBoost() and Moves[3].Enabled then
-                        GapZip.Begin()
+                if PointLaunch.TryBoost() then
+                        return
+                end
+                if Moves[3].Enabled and GapZip.TryBegin() then
+                        return
+                end
+                if Moves[9] and Moves[9].Enabled and AirZip.Try() then
+                        return
                 end
                 return
         end
 
+        -- R: Dual-Web Slingshot
         if key == Moves[4].Key and Moves[4].Enabled then
                 Sling.Begin()
                 return
         end
 
-        -- LeftShift: hold to sprint on ground and walls + fast-landing slide
+        -- LeftShift: Sprint + Ground Slide
         if key == Moves[5].Key or key == Moves[8].Key then
                 shiftHeld = true
                 if Moves[8].Enabled then
@@ -2120,6 +2422,7 @@ local function handleKeyBegan(key)
                 return
         end
 
+        -- G: Air Tricks
         if key == Moves[7].Key and Moves[7].Enabled then
                 Tricks.Begin()
                 return
@@ -2131,7 +2434,6 @@ track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
         local key = input.KeyCode
 
-        -- hide / show the control panel
         if key == Enum.KeyCode.RightShift then
                 togglePanel()
                 return
@@ -2145,7 +2447,6 @@ track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 shiftHeld = true
         end
 
-        -- active keybind capture consumes the next key
         if captureMove then
                 if key == Enum.KeyCode.Escape then
                         finishCapture(nil)
@@ -2155,8 +2456,6 @@ track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 return
         end
 
-        -- ignore inputs the game already consumed (e.g. typing in chat),
-        -- EXCEPT Space which we intentionally intercept for zip/boost
         if gameProcessed and key ~= Enum.KeyCode.Space then
                 return
         end
@@ -2197,7 +2496,7 @@ track(UserInputService.InputEnded:Connect(function(input)
 end))
 
 --======================================================================
--- DYNAMIC CAMERA FOV + MICRO-SHAKE  (after default camera update)
+-- DYNAMIC CAMERA FOV + MICRO-SHAKE
 --======================================================================
 RunService:BindToRenderStep("SpideyCamera_v3", Enum.RenderPriority.Camera.Value + 1, function(dt)
         if Engine.Destroyed then return end
@@ -2206,7 +2505,6 @@ RunService:BindToRenderStep("SpideyCamera_v3", Enum.RenderPriority.Camera.Value 
                 if not Camera then return end
         end
 
-        -- TargetFOV = clamp(70 + (speed / 220) * 40, 70, 110); slingshot overrides
         local targetFOV
         if Sling.Phase == 2 then
                 targetFOV = CONFIG.FOVBase + Sling.T * (CONFIG.FOVMax - CONFIG.FOVBase)
@@ -2222,7 +2520,6 @@ RunService:BindToRenderStep("SpideyCamera_v3", Enum.RenderPriority.Camera.Value 
         end
         Camera.FieldOfView = Camera.FieldOfView + (targetFOV - Camera.FieldOfView) * CONFIG.FOVLerp
 
-        -- launch micro-shake pulse, plus a subtle high-speed rumble
         if shakeTimer > 0 then
                 shakeTimer = math.max(shakeTimer - dt, 0)
                 local mag = math.min(shakeTimer * 0.3, 0.14)
@@ -2247,7 +2544,7 @@ RunService:BindToRenderStep("SpideyCamera_v3", Enum.RenderPriority.Camera.Value 
 end)
 
 --======================================================================
--- MAIN PHYSICS LOOP  (Heartbeat)
+-- MAIN PHYSICS DISPATCH (Heartbeat)
 --======================================================================
 track(RunService.Heartbeat:Connect(function(dt)
         if Engine.Destroyed then return end
@@ -2255,8 +2552,6 @@ track(RunService.Heartbeat:Connect(function(dt)
                 Camera = Workspace.CurrentCamera
         end
         if not (RootPart and RootPart.Parent and Humanoid and Humanoid.Parent and Humanoid.Health > 0) then
-                -- self-heal: if the character was replaced without our handler
-                -- catching it, re-resolve the rig instead of staying dead
                 if LocalPlayer.Character and LocalPlayer.Character ~= Character then
                         refreshRig()
                         fullCleanup()
@@ -2264,7 +2559,7 @@ track(RunService.Heartbeat:Connect(function(dt)
                 return
         end
 
-        -- 1) orientation recovery pass (wall eject / air trick landing)
+        -- 1) Upright recovery pass
         if Recovery.Active then
                 local alpha = math.clamp((os.clock() - Recovery.T0) / Recovery.Duration, 0, 1)
                 Tricks.RestoreJoints()
@@ -2291,7 +2586,7 @@ track(RunService.Heartbeat:Connect(function(dt)
                 end
         end
 
-        -- 1.5) passive wall attach (Insomniac parkour) — run/jump into walls
+        -- 1.5) Passive wall attach
         if not Wall.Crawling
                 and Moves[6].Enabled
                 and os.clock() > Wall.CooldownUntil
@@ -2307,8 +2602,7 @@ track(RunService.Heartbeat:Connect(function(dt)
                                 )
                                 if probe and math.abs(probe.Normal.Y) < 0.3 then
                                         local airborne = Humanoid.FloorMaterial == Enum.Material.Air
-                                        local runningAtWall = moveKeys.W
-                                                and look:Dot(probe.Normal * -1) > 0.45
+                                        local runningAtWall = moveKeys.W and look:Dot(probe.Normal * -1) > 0.45
                                         if airborne or runningAtWall then
                                                 Wall.Attach(probe)
                                         end
@@ -2317,7 +2611,7 @@ track(RunService.Heartbeat:Connect(function(dt)
                 end
         end
 
-        -- 1.6) ground sprint (LeftShift hold) — WalkSpeed written on transitions only
+        -- 1.6) Ground sprint
         local wantSprint = Moves[5].Enabled and shiftHeld
                 and not Wall.Crawling and Sling.Phase ~= 2
                 and Humanoid.FloorMaterial ~= Enum.Material.Air
@@ -2325,13 +2619,14 @@ track(RunService.Heartbeat:Connect(function(dt)
                 and StateManager.Current ~= StateManager.States.PointLaunching
         if wantSprint and not sprintActive then
                 sprintActive = true
+                Rig.DefaultWalkSpeed = Humanoid.WalkSpeed
                 Humanoid.WalkSpeed = CONFIG.RunSpeed
         elseif not wantSprint and sprintActive then
                 sprintActive = false
                 Humanoid.WalkSpeed = Rig.DefaultWalkSpeed
         end
 
-        -- 2) per-state physics dispatch
+        -- 2) Physics dispatch
         local st = StateManager.Current
         if st == StateManager.States.Swinging then
                 Swing.Step(dt)
@@ -2347,22 +2642,21 @@ track(RunService.Heartbeat:Connect(function(dt)
                 Slide.Step(dt)
         end
 
-        -- 3) hold-to-slide auto trigger on fast landings
+        -- 3) Auto slide on landing
         if not Slide.Active and Moves[8].Enabled and shiftHeld
                 and StateManager.Current == StateManager.States.Idle
                 and Humanoid.FloorMaterial ~= Enum.Material.Air then
                 Slide.TryBegin()
         end
 
-        -- 4) expire the point-launch boost window
+        -- 4) Boost window expiry
         PointLaunch.CheckWindow()
 
-        -- 5) anti-stuck velocity fail-safe
+        -- 5) Anti-stuck velocity fail-safe
         local speed = RootPart.AssemblyLinearVelocity.Magnitude
         if st == StateManager.States.Swinging or st == StateManager.States.PointLaunching then
                 local snagged = speed < CONFIG.AntiStuckSpeed
                 if snagged and st == StateManager.States.Swinging and Swing.Active and Swing.AnchorPos then
-                        -- hanging still at full rope extension is natural, not stuck
                         local d = (RootPart.Position - Swing.AnchorPos).Magnitude
                         if d >= Swing.RopeLength - 2.5 then
                                 snagged = false
@@ -2372,7 +2666,6 @@ track(RunService.Heartbeat:Connect(function(dt)
                         stuckTimer = stuckTimer + dt
                         if stuckTimer >= CONFIG.AntiStuckTime then
                                 stuckTimer = 0
-                                -- force snap: destroy webs and return to Idle
                                 Swing.Active = false
                                 PointLaunch.Pulling = false
                                 PointLaunch.Arrived = false
@@ -2392,8 +2685,6 @@ end))
 --======================================================================
 local function onCharacterAdded(character)
         lifeMaid:Cleanup()
-        -- wait for the rig to finish spawning (CharacterAdded fires before
-        -- Humanoid / HumanoidRootPart are guaranteed to be parented)
         character:WaitForChild("Humanoid", 10)
         character:WaitForChild("HumanoidRootPart", 10)
         refreshRig()
@@ -2403,15 +2694,6 @@ local function onCharacterAdded(character)
                 lifeMaid:Give(Humanoid.Died:Connect(function()
                         fullCleanup()
                 end))
-        end
-        if RootPart then
-                -- The client already owns its character physics; this is a best
-                -- effort no-op assertion that movement replicates from this client.
-                task.defer(function()
-                        pcall(function()
-                                RootPart:SetNetworkOwner(nil)
-                        end)
-                end)
         end
 end
 
@@ -2454,4 +2736,4 @@ if LocalPlayer.Character then
         task.spawn(onCharacterAdded, LocalPlayer.Character)
 end
 
-print("[SPIDEY ENGINE v3.4] Loaded successfully — press RightShift or the X button to open/close the panel.")
+print("[SPIDEY ENGINE v3.5] Loaded successfully — press RightShift or the X button to open/close the panel.")
